@@ -18,6 +18,7 @@ import {
   VotingCertificate
 } from '../types/election';
 import { calculateBlockHash, generateFolioCode, sha256, simpleFastHash } from '../utils/crypto';
+import { writeVoteToSheets } from '../utils/googleSheetsService';
 
 interface TerminalInfo {
   id: string;
@@ -51,6 +52,15 @@ interface ElectionContextType {
   terminalsList: TerminalInfo[];
   refreshServerState: () => Promise<void>;
 
+  // Authentication states & actions
+  isAdminAuthenticated: boolean;
+  isJuradoAuthenticated: boolean;
+  juradoName: string;
+  loginAdmin: (password: string) => { success: boolean; error?: string };
+  logoutAdmin: () => void;
+  loginJurado: (mesaNumber: number, juradoName: string, pin: string) => { success: boolean; error?: string };
+  logoutJurado: () => void;
+
   // Actions
   authenticateStudent: (docType: DocumentType, docNumber: string) => { success: boolean; student?: Student; error?: string };
   verifyStudentAtMesa: (studentId: string, juradoName: string) => boolean;
@@ -59,6 +69,8 @@ interface ElectionContextType {
   updateInstitutionConfig: (patch: Partial<ElectionConfig>) => void;
   addStudent: (newStudent: Omit<Student, 'id' | 'hasVoted'>) => void;
   addCandidate: (newCandidate: Omit<Candidate, 'id'>) => void;
+  updateCandidate: (updatedCandidate: Candidate) => void;
+  deleteCandidate: (candidateId: string) => { success: boolean; error?: string };
   syncWithGoogleSheets: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
   sendCertificateByEmail: (email: string, cert: VotingCertificate) => Promise<{ success: boolean; message: string }>;
   resetElectionData: () => void;
@@ -219,9 +231,41 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   });
 
   const [currentRole, setCurrentRole] = useState<AppRole>('VOTANTE');
-  const [juradoMesa, setJuradoMesa] = useState<number>(1);
+  const [juradoMesa, setJuradoMesa] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('ekiraya_jurado_mesa');
+      return saved ? Number(saved) : 1;
+    } catch {
+      return 1;
+    }
+  });
   const [activeVoter, setActiveVoter] = useState<Student | null>(null);
   const [latestCertificate, setLatestCertificate] = useState<VotingCertificate | null>(null);
+
+  // Authentication states
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('ekiraya_admin_auth') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [isJuradoAuthenticated, setIsJuradoAuthenticated] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('ekiraya_jurado_auth') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [juradoName, setJuradoName] = useState<string>(() => {
+    try {
+      return localStorage.getItem('ekiraya_jurado_name') || 'Prof. Carlos Mendoza (Delegado)';
+    } catch {
+      return 'Prof. Carlos Mendoza (Delegado)';
+    }
+  });
 
   // Multi-Computer Terminal Identity & Sync State
   const [terminalId] = useState<string>(() => {
@@ -791,39 +835,164 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Google Sheets integration
+  const updateCandidate = (updatedCand: Candidate) => {
+    setCandidates(prev => prev.map(c => (c.id === updatedCand.id ? updatedCand : c)));
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Modificación de candidatura: ${updatedCand.fullName} (#${updatedCand.number})`);
+
+    fetch('/api/election/update-candidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedCand)
+    }).catch(err => console.warn('Error sincronizando actualización de candidato:', err));
+
+    if (broadcastChannel) {
+      broadcastChannel.postMessage({ type: 'STATE_REFRESH' });
+    }
+  };
+
+  const deleteCandidate = (candidateId: string): { success: boolean; error?: string } => {
+    const target = candidates.find(c => c.id === candidateId);
+    if (!target) {
+      return { success: false, error: 'Candidato no encontrado en el sistema.' };
+    }
+
+    if (target.isBlankVote) {
+      return {
+        success: false,
+        error: 'El Voto en Blanco es de rango constitucional obligatorio (Art. 258 C.P. y Decreto 1860 de 1994). No puede ser eliminado del tarjetón.'
+      };
+    }
+
+    setCandidates(prev => prev.filter(c => c.id !== candidateId));
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Eliminación formal de candidatura: ${target.fullName} (#${target.number}) de ${target.positionId}`);
+
+    fetch('/api/election/delete-candidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: candidateId })
+    }).catch(err => console.warn('Error sincronizando eliminación de candidato:', err));
+
+    if (broadcastChannel) {
+      broadcastChannel.postMessage({ type: 'STATE_REFRESH' });
+    }
+
+    return { success: true };
+  };
+
+  // Authentication handlers
+  const loginAdmin = (password: string) => {
+    const trimmed = password.trim();
+    if (trimmed === 'admin2026' || trimmed === 'ekiraya2026' || trimmed === 'admin') {
+      setIsAdminAuthenticated(true);
+      try {
+        localStorage.setItem('ekiraya_admin_auth', 'true');
+      } catch {}
+      addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', 'Sesión de Administrador iniciada formalmente.');
+      return { success: true };
+    }
+    addAuditLog('SEGURIDAD_ALERTA', 'ADMIN', 'Control de Acceso', 'Intento fallido de autenticación administrativa con clave incorrecta.');
+    return { success: false, error: 'Clave de administrador incorrecta. Use la clave oficial (admin2026).' };
+  };
+
+  const logoutAdmin = () => {
+    setIsAdminAuthenticated(false);
+    try {
+      localStorage.removeItem('ekiraya_admin_auth');
+    } catch {}
+    setCurrentRole('VOTANTE');
+  };
+
+  const loginJurado = (mesaNumber: number, name: string, pin: string) => {
+    const trimmedPin = pin.trim().toLowerCase();
+    const valid = trimmedPin === 'jurado2026' || trimmedPin === `mesa0${mesaNumber}` || trimmedPin === `mesa${mesaNumber}` || trimmedPin === '1234';
+    if (valid) {
+      setIsJuradoAuthenticated(true);
+      setJuradoMesa(mesaNumber);
+      setJuradoName(name);
+      try {
+        localStorage.setItem('ekiraya_jurado_auth', 'true');
+        localStorage.setItem('ekiraya_jurado_mesa', mesaNumber.toString());
+        localStorage.setItem('ekiraya_jurado_name', name);
+      } catch {}
+      addAuditLog('APERTURA_MESA', 'JURADO', name, `Acreditación exitosa de jurado para Mesa 0${mesaNumber}. Formato E-11 instalado.`, mesaNumber);
+      return { success: true };
+    }
+    addAuditLog('SEGURIDAD_ALERTA', 'JURADO', name || 'Desconocido', `Intento fallido de acreditación para Mesa 0${mesaNumber} con PIN erróneo.`, mesaNumber);
+    return { success: false, error: 'PIN o clave de jurado incorrecta para esta mesa.' };
+  };
+
+  const logoutJurado = () => {
+    setIsJuradoAuthenticated(false);
+    try {
+      localStorage.removeItem('ekiraya_jurado_auth');
+    } catch {}
+    setCurrentRole('VOTANTE');
+  };
+
+  // Google Sheets integration (Lectura y Escritura Real)
   const syncWithGoogleSheets = async () => {
+    const scriptUrl = config.googleSheets.scriptUrl;
+    if (!scriptUrl) {
+      return { success: false, rowsSynced: 0, message: 'URL del webhook de Google Sheets no configurada.' };
+    }
+
     setConfig(prev => ({
       ...prev,
       googleSheets: { ...prev.googleSheets, status: 'syncing' }
     }));
 
     try {
-      // Simulate real Google Apps Script webhook / HTTP transmission
-      await new Promise(resolve => setTimeout(resolve, 900));
+      const payload = {
+        action: 'batchSync',
+        votesCount: votes.length,
+        votedStudentsCount: students.filter(s => s.hasVoted).length,
+        votes: votes.map(v => ({
+          voteToken: v.voteToken,
+          positionId: v.positionId,
+          candidateId: v.candidateId,
+          mesaNumber: v.mesaNumber,
+          hash: v.hash,
+          timestamp: v.timestamp
+        })),
+        studentsVoted: students.filter(s => s.hasVoted).map(s => ({
+          documentNumber: s.documentNumber,
+          fullName: s.fullName,
+          grade: s.grade,
+          group: s.group,
+          mesaNumber: s.mesaNumber,
+          votedAt: s.votedAt,
+          receiptFolio: s.receiptFolio
+        }))
+      };
 
-      const now = new Date().toISOString();
-      setConfig(prev => ({
-        ...prev,
-        googleSheets: {
-          ...prev.googleSheets,
-          status: 'success',
-          lastSyncTime: now
-        }
-      }));
+      const res = await writeVoteToSheets(scriptUrl, payload);
 
-      addAuditLog('SYNC_SHEETS', 'SISTEMA', 'Google Sheets Conector', `Sincronización exitosa de ${votes.length} registros y ${students.filter(s => s.hasVoted).length} sufragantes.`);
-      return { success: true, rowsSynced: votes.length, message: 'Datos sincronizados exitosamente con Google Sheets.' };
-    } catch (err) {
+      if (res.success) {
+        const now = new Date().toISOString();
+        setConfig(prev => ({
+          ...prev,
+          googleSheets: {
+            ...prev.googleSheets,
+            status: 'success',
+            lastSyncTime: now
+          }
+        }));
+
+        addAuditLog('SYNC_SHEETS', 'SISTEMA', 'Google Sheets Conector', `Sincronización exitosa: ${votes.length} votos y censo transmitidos a Google Sheets.`);
+        return { success: true, rowsSynced: votes.length, message: res.message || 'Sincronización con Google Sheets completada.' };
+      } else {
+        throw new Error(res.message || 'Error en comunicación con Google Sheets');
+      }
+    } catch (err: any) {
       setConfig(prev => ({
         ...prev,
         googleSheets: {
           ...prev.googleSheets,
           status: 'error',
-          errorMessage: 'Error al contactar webhook de Google Sheets'
+          errorMessage: err.message || 'Error al contactar webhook de Google Sheets'
         }
       }));
-      return { success: false, rowsSynced: 0, message: 'Fallo al sincronizar con Google Sheets.' };
+      return { success: false, rowsSynced: 0, message: err.message || 'Fallo al sincronizar con Google Sheets.' };
     }
   };
 
@@ -901,6 +1070,15 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updateInstitutionConfig,
         addStudent,
         addCandidate,
+        updateCandidate,
+        deleteCandidate,
+        isAdminAuthenticated,
+        isJuradoAuthenticated,
+        juradoName,
+        loginAdmin,
+        logoutAdmin,
+        loginJurado,
+        logoutJurado,
         syncWithGoogleSheets,
         sendCertificateByEmail,
         resetElectionData,

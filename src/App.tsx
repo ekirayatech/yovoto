@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import React, { useState } from 'react';
 import { AdminDashboard } from './components/AdminPortal/AdminDashboard';
+import { AdminLoginForm } from './components/Auth/AdminLoginForm';
+import { JuradoLoginForm } from './components/Auth/JuradoLoginForm';
 import { Header } from './components/Header';
 import { JuradoDashboard } from './components/JuradoPortal/JuradoDashboard';
 import { NormativeModal } from './components/NormativeModal';
@@ -17,7 +19,16 @@ import { VotingCertificateModal } from './components/VoterPortal/VotingCertifica
 import { ElectionProvider, useElection } from './context/ElectionContext';
 
 function MainLayout() {
-  const { currentRole, activeVoter, latestCertificate, setLatestCertificate, setActiveVoter } = useElection();
+  const {
+    currentRole,
+    setCurrentRole,
+    activeVoter,
+    latestCertificate,
+    setLatestCertificate,
+    setActiveVoter,
+    isAdminAuthenticated,
+    isJuradoAuthenticated
+  } = useElection();
   const [isNormativeOpen, setIsNormativeOpen] = useState<boolean>(false);
   const [pendingSelections, setPendingSelections] = useState<Record<string, string> | null>(null);
 
@@ -70,9 +81,21 @@ function MainLayout() {
           </>
         )}
 
-        {currentRole === 'JURADO' && <JuradoDashboard />}
+        {currentRole === 'JURADO' && (
+          !isJuradoAuthenticated ? (
+            <JuradoLoginForm onCancel={() => setCurrentRole('VOTANTE')} />
+          ) : (
+            <JuradoDashboard />
+          )
+        )}
 
-        {currentRole === 'ADMIN' && <AdminDashboard />}
+        {currentRole === 'ADMIN' && (
+          !isAdminAuthenticated ? (
+            <AdminLoginForm onCancel={() => setCurrentRole('VOTANTE')} />
+          ) : (
+            <AdminDashboard />
+          )
+        )}
       </main>
 
       {/* Normative Reference Modal */}

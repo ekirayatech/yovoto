@@ -413,6 +413,64 @@ app.post('/api/election/add-candidate', (req: Request, res: Response) => {
   res.json({ success: true, candidate });
 });
 
+// API: Update candidate
+app.post('/api/election/update-candidate', (req: Request, res: Response) => {
+  const updatedCandidate = req.body;
+  if (!updatedCandidate || !updatedCandidate.id) {
+    res.status(400).json({ success: false, error: 'ID de candidato requerido' });
+    return;
+  }
+
+  serverCandidates = serverCandidates.map(c => (c.id === updatedCandidate.id ? updatedCandidate : c));
+
+  const newLog: AuditLog = {
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    action: 'SISTEMA_INICIO',
+    actorType: 'ADMIN',
+    actorName: 'Comité Electoral',
+    details: `Candidatura modificada: ${updatedCandidate.fullName} (#${updatedCandidate.number}) para ${updatedCandidate.positionId}`,
+    hash: Math.random().toString(36).substr(2, 12),
+    status: 'VERIFICADO'
+  };
+  serverAuditLogs = [newLog, ...serverAuditLogs];
+
+  broadcast('candidate_updated', { candidate: updatedCandidate, newLog });
+  res.json({ success: true, candidate: updatedCandidate });
+});
+
+// API: Delete candidate
+app.post('/api/election/delete-candidate', (req: Request, res: Response) => {
+  const { id } = req.body;
+  if (!id) {
+    res.status(400).json({ success: false, error: 'ID de candidato requerido' });
+    return;
+  }
+
+  const target = serverCandidates.find(c => c.id === id);
+  if (target?.isBlankVote) {
+    res.status(400).json({ success: false, error: 'No se puede eliminar el voto en blanco obligatorio.' });
+    return;
+  }
+
+  serverCandidates = serverCandidates.filter(c => c.id !== id);
+
+  const newLog: AuditLog = {
+    id: `log-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    action: 'SISTEMA_INICIO',
+    actorType: 'ADMIN',
+    actorName: 'Comité Electoral',
+    details: `Candidatura retirada del tarjetón: ${target ? target.fullName : id}`,
+    hash: Math.random().toString(36).substr(2, 12),
+    status: 'VERIFICADO'
+  };
+  serverAuditLogs = [newLog, ...serverAuditLogs];
+
+  broadcast('candidate_deleted', { id, newLog });
+  res.json({ success: true, id });
+});
+
 // API: Update election status
 app.post('/api/election/status', (req: Request, res: Response) => {
   const { status } = req.body;

@@ -24,6 +24,12 @@ import {
 } from 'lucide-react';
 import React, { useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
+import {
+  diagnoseScriptUrl,
+  normalizeScriptUrl,
+  readCensusFromSheets,
+  writeVoteToSheets
+} from '../../utils/googleSheetsService';
 
 export const IntegrationsTab: React.FC = () => {
   const { config, updateInstitutionConfig, syncWithGoogleSheets, votes, students } = useElection();
@@ -97,10 +103,12 @@ export const IntegrationsTab: React.FC = () => {
 
   // Test Real GET (Reading from Google Sheets)
   const handleTestReadSheets = async () => {
-    if (!scriptUrl) {
-      alert('Por favor ingrese la URL del Webhook de Google Apps Script primero.');
+    const diag = diagnoseScriptUrl(scriptUrl);
+    if (!diag.valid) {
+      alert(diag.warning || 'Por favor ingrese la URL del Webhook de Google Apps Script primero.');
       return;
     }
+
     setTestResult({
       type: 'read',
       status: 'loading',
@@ -108,38 +116,35 @@ export const IntegrationsTab: React.FC = () => {
     });
 
     try {
-      const res = await fetch('/api/election/sheets-read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scriptUrl, action: 'getCensus' })
-      });
-      const data = await res.json();
-      if (data.success) {
+      const res = await readCensusFromSheets(scriptUrl);
+      if (res.success) {
         setTestResult({
           type: 'read',
           status: 'success',
-          message: 'Lectura exitosa desde Google Sheets.',
-          details: JSON.stringify(data.data, null, 2)
+          message: res.message,
+          details: res.data ? JSON.stringify(res.data, null, 2) : res.details
         });
       } else {
-        throw new Error(data.error || 'Error al leer');
+        throw new Error(res.message || 'Error al conectar');
       }
     } catch (err: any) {
       setTestResult({
         type: 'read',
         status: 'error',
-        message: 'No se pudo leer desde el Webhook de Google Sheets.',
-        details: err.message || 'Verifique que el despliegue esté en modo "Cualquiera (Anyone)".'
+        message: err.message || 'No se pudo leer desde el Webhook de Google Sheets.',
+        details: 'Asegúrese de que el Apps Script esté implementado como Aplicación Web, con acceso para "Cualquiera" (Anyone).'
       });
     }
   };
 
   // Test Real POST (Writing to Google Sheets)
   const handleTestWriteSheets = async () => {
-    if (!scriptUrl) {
-      alert('Por favor ingrese la URL del Webhook de Google Apps Script primero.');
+    const diag = diagnoseScriptUrl(scriptUrl);
+    if (!diag.valid) {
+      alert(diag.warning || 'Por favor ingrese la URL del Webhook de Google Apps Script primero.');
       return;
     }
+
     setTestResult({
       type: 'write',
       status: 'loading',
@@ -148,7 +153,7 @@ export const IntegrationsTab: React.FC = () => {
 
     try {
       const testPayload = {
-        action: 'castVote',
+        action: 'castVote' as const,
         voteToken: `TEST-${Date.now()}`,
         positionId: 'personero',
         candidateId: 'test-cand',
@@ -158,28 +163,23 @@ export const IntegrationsTab: React.FC = () => {
         timestamp: new Date().toISOString()
       };
 
-      const res = await fetch('/api/election/sheets-write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scriptUrl, payload: testPayload })
-      });
-      const data = await res.json();
-      if (data.success) {
+      const res = await writeVoteToSheets(scriptUrl, testPayload);
+      if (res.success) {
         setTestResult({
           type: 'write',
           status: 'success',
-          message: 'Escritura exitosa en Google Sheets.',
-          details: JSON.stringify(data.data, null, 2)
+          message: res.message,
+          details: res.data ? JSON.stringify(res.data, null, 2) : res.details
         });
       } else {
-        throw new Error(data.error || 'Error al escribir');
+        throw new Error(res.message || 'Error al escribir');
       }
     } catch (err: any) {
       setTestResult({
         type: 'write',
         status: 'error',
-        message: 'No se pudo escribir en el Webhook de Google Sheets.',
-        details: err.message || 'Verifique permisos de ejecución en Google Apps Script.'
+        message: err.message || 'No se pudo escribir en el Webhook de Google Sheets.',
+        details: 'Verifique que la URL termine en /exec y que los permisos permitan peticiones de "Cualquiera".'
       });
     }
   };

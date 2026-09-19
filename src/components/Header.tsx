@@ -18,7 +18,20 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
-  const { config, currentRole, setCurrentRole, activeVoter, setActiveVoter, juradoMesa, setJuradoMesa } = useElection();
+  const {
+    config,
+    currentRole,
+    setCurrentRole,
+    activeVoter,
+    setActiveVoter,
+    juradoMesa,
+    setJuradoMesa,
+    isAdminAuthenticated,
+    isJuradoAuthenticated,
+    logoutAdmin,
+    logoutJurado,
+    juradoName
+  } = useElection();
   const [currentTime, setCurrentTime] = useState<string>('');
 
   useEffect(() => {
@@ -162,6 +175,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
               >
                 <Users className="w-3.5 h-3.5" />
                 <span>Mesa Jurado</span>
+                {isJuradoAuthenticated && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Sesión activa" />
+                )}
               </button>
 
               <button
@@ -175,8 +191,43 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
                 <span>Administrador</span>
+                {isAdminAuthenticated && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400" title="Sesión activa" />
+                )}
               </button>
             </div>
+
+            {/* Logout button for authenticated Jurado */}
+            {currentRole === 'JURADO' && isJuradoAuthenticated && (
+              <button
+                onClick={() => {
+                  if (confirm('¿Desea cerrar la sesión de Jurado de Votación?')) {
+                    logoutJurado();
+                  }
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
+                title="Cerrar sesión de Jurado"
+              >
+                <LogOut className="w-3.5 h-3.5 text-emerald-700" />
+                <span className="hidden sm:inline">Cerrar Sesión</span>
+              </button>
+            )}
+
+            {/* Logout button for authenticated Admin */}
+            {currentRole === 'ADMIN' && isAdminAuthenticated && (
+              <button
+                onClick={() => {
+                  if (confirm('¿Desea cerrar la sesión de Administrador?')) {
+                    logoutAdmin();
+                  }
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                title="Cerrar sesión de Administrador"
+              >
+                <LogOut className="w-3.5 h-3.5 text-slate-600" />
+                <span className="hidden sm:inline">Cerrar Sesión</span>
+              </button>
+            )}
 
             {/* Active voter logout helper if in booth */}
             {activeVoter && currentRole === 'VOTANTE' && (
