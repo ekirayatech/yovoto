@@ -264,9 +264,31 @@ export async function writeToSheets(
 // MÉTODOS ESPECÍFICOS DE LECTURA (GET) PARA LAS 4 BASES DE DATOS
 // =========================================================================
 
+/**
+ * Normaliza cualquier formato de documento (elimina puntos, comas, espacios y guiones)
+ */
+export function normalizeDocumentNumber(val: string | number | null | undefined): string {
+  if (val === null || val === undefined) return '';
+  return String(val).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().trim();
+}
+
 /** 1. Leer Votantes (Censo Estudiantil) */
 export async function readCensusFromSheets(scriptUrl: string): Promise<SheetsTestResult> {
   return readFromSheets(scriptUrl, 'getVoters');
+}
+
+/** 1.1 Consultar un Votante específico en Google Sheets (Búsqueda en caliente) */
+export async function lookupVoterInSheets(
+  scriptUrl: string,
+  documentNumber: string,
+  docType?: string
+): Promise<SheetsTestResult> {
+  const cleanDoc = normalizeDocumentNumber(documentNumber);
+  return readFromSheets(scriptUrl, 'getVoter' as any, {
+    documentNumber: cleanDoc,
+    rawDoc: documentNumber.trim(),
+    docType: docType || ''
+  });
 }
 
 /** 2. Leer Candidatos */

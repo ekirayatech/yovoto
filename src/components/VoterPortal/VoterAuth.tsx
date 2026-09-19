@@ -8,8 +8,10 @@ import {
   Fingerprint,
   HelpCircle,
   KeyRound,
+  Loader2,
   Lock,
   MapPin,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   UserCheck
@@ -20,29 +22,59 @@ import { getStationForMesa, POLLING_STATIONS } from '../../data/mockElectionData
 import { DocumentType, Student } from '../../types/election';
 
 export const VoterAuth: React.FC = () => {
-  const { authenticateStudent, students, config } = useElection();
+  const { authenticateStudent, students, config, loadTableFromSheets } = useElection();
   const [docType, setDocType] = useState<DocumentType>('TI');
   const [docNumber, setDocNumber] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [alreadyVotedStudent, setAlreadyVotedStudent] = useState<Student | null>(null);
   const [showStationsGuide, setShowStationsGuide] = useState<boolean>(false);
+  const [isVerifying, setIsVerifying] = useState<boolean>(false);
+  const [isSyncingCensus, setIsSyncingCensus] = useState<boolean>(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setAlreadyVotedStudent(null);
+    setSyncNotice(null);
 
-    if (!docNumber.trim()) {
+    const trimmed = docNumber.trim();
+    if (!trimmed) {
       setErrorMsg('Por favor ingrese el número de documento.');
       return;
     }
 
-    const result = authenticateStudent(docType, docNumber.trim());
-    if (!result.success) {
-      setErrorMsg(result.error || 'No fue posible autenticar el documento.');
-      if (result.student && result.student.hasVoted) {
-        setAlreadyVotedStudent(result.student);
+    setIsVerifying(true);
+    try {
+      const result = await authenticateStudent(docType, trimmed);
+      if (!result.success) {
+        setErrorMsg(result.error || 'No fue posible autenticar el documento.');
+        if (result.student && result.student.hasVoted) {
+          setAlreadyVotedStudent(result.student);
+        }
       }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error al autenticar documento.');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleManualSync = async () => {
+    setIsSyncingCensus(true);
+    setSyncNotice(null);
+    setErrorMsg(null);
+    try {
+      const res = await loadTableFromSheets('voters');
+      if (res.success) {
+        setSyncNotice(`¡Censo sincronizado con éxito! (${res.count ?? students.length} votantes registrados)`);
+      } else {
+        setErrorMsg(res.message || 'No fue posible sincronizar el censo desde Google Sheets.');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error de comunicación con Google Sheets.');
+    } finally {
+      setIsSyncingCensus(false);
     }
   };
 
@@ -51,6 +83,7 @@ export const VoterAuth: React.FC = () => {
     setDocNumber(student.documentNumber);
     setErrorMsg(null);
     setAlreadyVotedStudent(null);
+    setSyncNotice(null);
   };
 
   // Diverse unvoted students for quick testing across all school levels
@@ -155,18 +188,70 @@ export const VoterAuth: React.FC = () => {
             </p>
           </div>
 
+          {/* Google Sheets Census Status & Quick Refresh */}
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-slate-700 font-medium">
+                Censo oficial: <strong className="text-slate-900">{students.length}</strong> estudiantes
+              </span>
+              {config.googleSheets?.scriptUrl && !config.googleSheets.scriptUrl.includes('voto_ekiraya') && (
+                <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                  Sheets En Línea
+                </span>
+              )}
+            </div>
+
+            <button
+              type="button"
+              id="btn-sync-census-voter"
+              onClick={handleManualSync}
+              disabled={isSyncingCensus || isVerifying}
+              className="inline-flex items-center gap-1.5 text-[11px] font-bold text-purple-700 hover:text-purple-900 hover:underline cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3 h-3 ${isSyncingCensus ? 'animate-spin text-purple-700' : ''}`} />
+              <span>{isSyncingCensus ? 'Sincronizando...' : 'Actualizar Censo'}</span>
+            </button>
+          </div>
+
+          {/* Sync Success Notice */}
+          {syncNotice && (
+            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{syncNotice}</span>
+            </div>
+          )}
+
           {/* Error / Alert notification */}
           {errorMsg && (
-            <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2.5 animate-shake">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              <div className="flex-1 leading-relaxed">
-                {errorMsg}
-                {alreadyVotedStudent && alreadyVotedStudent.receiptFolio && (
-                  <div className="mt-2 pt-2 border-t border-red-200/80 font-mono text-[11px]">
-                    Certificado emitido con Folio: <strong>{alreadyVotedStudent.receiptFolio}</strong>
-                  </div>
-                )}
+            <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex flex-col gap-2 animate-shake">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1 leading-relaxed">
+                  {errorMsg}
+                  {alreadyVotedStudent && alreadyVotedStudent.receiptFolio && (
+                    <div className="mt-2 pt-2 border-t border-red-200/80 font-mono text-[11px]">
+                      Certificado emitido con Folio: <strong>{alreadyVotedStudent.receiptFolio}</strong>
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {/* Quick action to refresh census if document was not recognized */}
+              {errorMsg.includes('censo') && (
+                <div className="pt-2 border-t border-red-200/60 flex items-center justify-between text-[11px]">
+                  <span className="text-red-700">¿El estudiante fue añadido recientemente en Google Sheets?</span>
+                  <button
+                    type="button"
+                    onClick={handleManualSync}
+                    disabled={isSyncingCensus}
+                    className="font-bold underline text-red-900 hover:text-black cursor-pointer flex items-center gap-1"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSyncingCensus ? 'animate-spin' : ''}`} />
+                    Sincronizar ahora
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -174,15 +259,24 @@ export const VoterAuth: React.FC = () => {
           <button
             id="btn-submit-voter-auth"
             type="submit"
-            disabled={config.status !== 'ABIERTA'}
+            disabled={config.status !== 'ABIERTA' || isVerifying}
             className={`w-full py-4 px-6 rounded-xl font-bold text-base flex items-center justify-center gap-2 shadow-md transition-all ${
-              config.status === 'ABIERTA'
+              config.status === 'ABIERTA' && !isVerifying
                 ? 'bg-linear-to-r from-purple-700 to-purple-900 hover:from-purple-800 hover:to-indigo-950 text-white active:scale-[0.99] shadow-purple-900/20'
                 : 'bg-slate-300 text-slate-500 cursor-not-allowed'
             }`}
           >
-            <span>Ingresar a Cabina y Votar</span>
-            <ChevronRight className="w-5 h-5" />
+            {isVerifying ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin text-white" />
+                <span>Verificando con Censo Oficial...</span>
+              </>
+            ) : (
+              <>
+                <span>Ingresar a Cabina y Votar</span>
+                <ChevronRight className="w-5 h-5" />
+              </>
+            )}
           </button>
         </form>
 

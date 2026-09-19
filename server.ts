@@ -2,16 +2,20 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import {
+  INITIAL_ADMINS,
   INITIAL_CANDIDATES,
   INITIAL_CONFIG,
+  INITIAL_JURADOS,
   INITIAL_POSITIONS,
   INITIAL_STUDENTS
 } from './src/data/mockElectionData';
 import {
+  AdminMember,
   AuditLog,
   Candidate,
   ElectionConfig,
   EncryptedVote,
+  JuradoMember,
   Position,
   Student
 } from './src/types/election';
@@ -26,6 +30,8 @@ let serverConfig: ElectionConfig = { ...INITIAL_CONFIG };
 let serverPositions: Position[] = [...INITIAL_POSITIONS];
 let serverCandidates: Candidate[] = [...INITIAL_CANDIDATES];
 let serverStudents: Student[] = [...INITIAL_STUDENTS];
+let serverJurados: JuradoMember[] = [...INITIAL_JURADOS];
+let serverAdmins: AdminMember[] = [...INITIAL_ADMINS];
 let serverVotes: EncryptedVote[] = [];
 
 // Generate seed votes for initially voted students
@@ -182,6 +188,8 @@ app.get('/api/election/state', (req: Request, res: Response) => {
     positions: serverPositions,
     candidates: serverCandidates,
     students: serverStudents,
+    jurados: serverJurados,
+    admins: serverAdmins,
     votes: serverVotes,
     auditLogs: serverAuditLogs,
     terminalsCount: Math.max(1, activeTerminals.size),
@@ -499,6 +507,59 @@ app.post('/api/election/status', (req: Request, res: Response) => {
   res.json({ success: true, status, config: serverConfig });
 });
 
+// API: Update election configuration centrally
+app.post('/api/election/config', (req: Request, res: Response) => {
+  const { config: newConfig } = req.body;
+  if (newConfig) {
+    serverConfig = {
+      ...serverConfig,
+      ...newConfig,
+      googleSheets: {
+        ...serverConfig.googleSheets,
+        ...(newConfig.googleSheets || {})
+      }
+    };
+    broadcast('config_updated', { config: serverConfig });
+  }
+  res.json({ success: true, config: serverConfig });
+});
+
+// API: Sync students census loaded from Google Sheets
+app.post('/api/election/sync-students', (req: Request, res: Response) => {
+  const { students } = req.body;
+  if (Array.isArray(students) && students.length > 0) {
+    serverStudents = students;
+    broadcast('students_synced', { count: students.length });
+  }
+  res.json({ success: true, count: serverStudents.length });
+});
+
+// API: Sync all 4 databases loaded from Google Sheets
+app.post('/api/election/sync-all', (req: Request, res: Response) => {
+  const { students, candidates, jurados, admins, config } = req.body;
+  if (Array.isArray(students) && students.length > 0) serverStudents = students;
+  if (Array.isArray(candidates) && candidates.length > 0) serverCandidates = candidates;
+  if (Array.isArray(jurados) && jurados.length > 0) serverJurados = jurados;
+  if (Array.isArray(admins) && admins.length > 0) serverAdmins = admins;
+  if (config) {
+    serverConfig = {
+      ...serverConfig,
+      ...config,
+      googleSheets: {
+        ...serverConfig.googleSheets,
+        ...(config.googleSheets || {})
+      }
+    };
+  }
+  broadcast('all_synced', {
+    studentsCount: serverStudents.length,
+    candidatesCount: serverCandidates.length,
+    juradosCount: serverJurados.length,
+    adminsCount: serverAdmins.length
+  });
+  res.json({ success: true });
+});
+
 // API: Proxy Google Sheets Sync (Escritura y Lectura para base de datos)
 app.post('/api/election/sheets-write', async (req: Request, res: Response) => {
   const { scriptUrl, payload } = req.body;
@@ -510,7 +571,8 @@ app.post('/api/election/sheets-write', async (req: Request, res: Response) => {
     const response = await fetch(scriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      redirect: 'follow'
     });
     const text = await response.text();
     let data;
@@ -526,7 +588,7 @@ app.post('/api/election/sheets-write', async (req: Request, res: Response) => {
 });
 
 app.post('/api/election/sheets-read', async (req: Request, res: Response) => {
-  const { scriptUrl, action } = req.body;
+  const { scriptUrl, action, ...otherParams } = req.body;
   if (!scriptUrl) {
     res.status(400).json({ success: false, error: 'URL del webhook no proporcionada' });
     return;
@@ -534,9 +596,18 @@ app.post('/api/election/sheets-read', async (req: Request, res: Response) => {
   try {
     const targetUrl = new URL(scriptUrl);
     targetUrl.searchParams.set('action', action || 'getCensus');
+    targetUrl.searchParams.set('_t', Date.now().toString());
+
+    Object.entries(otherParams).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) {
+        targetUrl.searchParams.set(k, String(v));
+      }
+    });
+
     const response = await fetch(targetUrl.toString(), {
       method: 'GET',
-      headers: { 'Accept': 'application/json' }
+      headers: { 'Accept': 'application/json' },
+      redirect: 'follow'
     });
     const text = await response.text();
     let data;

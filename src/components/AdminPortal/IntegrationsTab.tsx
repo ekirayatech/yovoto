@@ -305,50 +305,156 @@ export const IntegrationsTab: React.FC = () => {
  */
 
 // -------------------------------------------------------------------------
+// UTILITARIOS DE BÚSQUEDA Y PARSEO INTELIGENTE DE HOJAS Y COLUMNAS
+// -------------------------------------------------------------------------
+function findSheet(ss, names) {
+  for (var i = 0; i < names.length; i++) {
+    var s = ss.getSheetByName(names[i]);
+    if (s && s.getLastRow() > 0) return s;
+  }
+  var allSheets = ss.getSheets();
+  for (var i = 0; i < names.length; i++) {
+    var target = names[i].toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (var j = 0; j < allSheets.length; j++) {
+      var sName = allSheets[j].getName().toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (sName === target && allSheets[j].getLastRow() > 0) {
+        return allSheets[j];
+      }
+    }
+  }
+  var firstNamed = ss.getSheetByName(names[0]);
+  if (firstNamed) return firstNamed;
+  for (var k = 0; k < allSheets.length; k++) {
+    if (allSheets[k].getLastRow() > 1) return allSheets[k];
+  }
+  return allSheets[0] || ss.insertSheet(names[0]);
+}
+
+function parseVoterRows(rows) {
+  if (!rows || rows.length <= 1) return [];
+  var headers = rows[0].map(function(h) {
+    return String(h || '').toLowerCase().trim().replace(/[^a-z0-9áéíóúüñ]/g, '');
+  });
+
+  var colDoc = -1;
+  var colType = -1;
+  var colName = -1;
+  var colGrade = -1;
+  var colGroup = -1;
+  var colMesa = -1;
+  var colEmail = -1;
+  var colVoted = -1;
+  var colDate = -1;
+  var colFolio = -1;
+
+  for (var c = 0; c < headers.length; c++) {
+    var h = headers[c];
+    if (colDoc === -1 && (h.indexOf('documento') !== -1 || h.indexOf('identif') !== -1 || h.indexOf('tarjeta') !== -1 || h.indexOf('cedula') !== -1 || h.indexOf('numero') !== -1 || h === 'doc' || h === 'ti' || h === 'cc' || h === 'id' || h === 'codigo')) {
+      colDoc = c;
+    } else if (colType === -1 && (h.indexOf('tipo') !== -1 || h === 'td')) {
+      colType = c;
+    } else if (colName === -1 && (h.indexOf('nombre') !== -1 || h.indexOf('estudiante') !== -1 || h.indexOf('alumno') !== -1 || h.indexOf('apellido') !== -1)) {
+      colName = c;
+    } else if (colGrade === -1 && (h.indexOf('grado') !== -1 || h.indexOf('curso') !== -1 || h.indexOf('nivel') !== -1 || h === 'grade')) {
+      colGrade = c;
+    } else if (colGroup === -1 && (h.indexOf('grupo') !== -1 || h.indexOf('seccion') !== -1 || h.indexOf('salon') !== -1)) {
+      colGroup = c;
+    } else if (colMesa === -1 && (h.indexOf('mesa') !== -1 || h.indexOf('puesto') !== -1)) {
+      colMesa = c;
+    } else if (colEmail === -1 && (h.indexOf('correo') !== -1 || h.indexOf('email') !== -1 || h.indexOf('mail') !== -1)) {
+      colEmail = c;
+    } else if (colVoted === -1 && (h.indexOf('vota') !== -1 || h.indexOf('sufrag') !== -1 || h.indexOf('estado') !== -1)) {
+      colVoted = c;
+    } else if (colDate === -1 && (h.indexOf('fecha') !== -1 || h.indexOf('hora') !== -1)) {
+      colDate = c;
+    } else if (colFolio === -1 && (h.indexOf('folio') !== -1 || h.indexOf('certif') !== -1)) {
+      colFolio = c;
+    }
+  }
+
+  // Fallbacks si los encabezados no tienen nombres convencionales
+  if (colDoc === -1) colDoc = (colType === 0) ? 1 : 0;
+  if (colName === -1) colName = (colDoc === 0) ? 1 : (colDoc === 1 ? 2 : 1);
+  if (colGrade === -1 && headers.length > 2) colGrade = 2;
+  if (colGroup === -1 && headers.length > 3) colGroup = 3;
+  if (colMesa === -1 && headers.length > 4) colMesa = 4;
+
+  var students = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    var rawDoc = colDoc !== -1 ? r[colDoc] : '';
+    if (rawDoc === '' || rawDoc === null || rawDoc === undefined) continue;
+    var docStr = String(rawDoc).trim().replace(/\.0$/, '');
+    if (!docStr) continue;
+
+    var rawVoted = colVoted !== -1 ? r[colVoted] : false;
+    var hasVoted = rawVoted === true || String(rawVoted).toUpperCase() === 'SI' || String(rawVoted).toUpperCase() === 'TRUE' || String(rawVoted).toUpperCase() === 'VOTÓ' || String(rawVoted).toUpperCase() === 'VOTO';
+
+    students.push({
+      id: 'est-' + i,
+      documentType: colType !== -1 && r[colType] ? String(r[colType]).toUpperCase().trim() : 'TI',
+      documentNumber: docStr,
+      fullName: colName !== -1 && r[colName] ? String(r[colName]).trim() : 'Estudiante ' + docStr,
+      grade: colGrade !== -1 && r[colGrade] ? String(r[colGrade]).trim() : '',
+      group: colGroup !== -1 && r[colGroup] ? String(r[colGroup]).trim() : '',
+      mesaNumber: colMesa !== -1 && Number(r[colMesa]) ? Number(r[colMesa]) : 1,
+      email: colEmail !== -1 && r[colEmail] ? String(r[colEmail]).trim() : '',
+      hasVoted: hasVoted,
+      votedAt: colDate !== -1 && r[colDate] ? String(r[colDate]) : '',
+      receiptFolio: colFolio !== -1 && r[colFolio] ? String(r[colFolio]) : ''
+    });
+  }
+  return students;
+}
+
+// -------------------------------------------------------------------------
 // 1. LECTURA DESDE LA BASE DE DATOS (GET)
 // -------------------------------------------------------------------------
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "health";
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // A. LECTURA: Base de Datos de Votantes (Censo)
-  if (action === "getVoters" || action === "getCensus") {
-    var sheet = ss.getSheetByName("Votantes") || ss.getSheetByName("Censo_Estudiantil") || ss.insertSheet("Votantes");
+  // A.1 CONSULTA ESPECÍFICA DE UN VOTANTE (Búsqueda en caliente por documento)
+  if (action === "getVoter") {
+    var searchDoc = (e.parameter.documentNumber || e.parameter.rawDoc || "").toString().replace(/[^a-zA-Z0-9]/g, "").toLowerCase().trim();
+    var sheet = findSheet(ss, ["Votantes", "Censo_Estudiantil", "Censo Estudiantil", "Censo", "Estudiantes", "Alumnos", "Sheet1", "Hoja 1"]);
     var rows = sheet.getDataRange().getValues();
-    if (rows.length <= 1) return respondJSON({ success: true, count: 0, students: [] });
-    var students = [];
-    for (var i = 1; i < rows.length; i++) {
-      var r = rows[i];
-      if (!r[1]) continue;
-      students.push({
-        documentType: r[0] || "TI",
-        documentNumber: String(r[1]),
-        fullName: r[2] || "",
-        grade: r[3] || "",
-        group: r[4] || "",
-        mesaNumber: Number(r[5]) || 1,
-        email: r[6] || "",
-        hasVoted: r[7] === true || String(r[7]).toUpperCase() === "SI" || String(r[7]).toUpperCase() === "TRUE",
-        votedAt: r[8] || "",
-        receiptFolio: r[9] || ""
-      });
+    var students = parseVoterRows(rows);
+    var matched = null;
+    for (var k = 0; k < students.length; k++) {
+      var sClean = String(students[k].documentNumber).replace(/[^a-zA-Z0-9]/g, "").toLowerCase().trim();
+      if (sClean === searchDoc) {
+        matched = students[k];
+        break;
+      }
     }
+    if (matched) {
+      return respondJSON({ success: true, found: true, student: matched });
+    }
+    return respondJSON({ success: true, found: false, message: "El documento no se encuentra en el censo oficial de Google Sheets.", totalInSheet: students.length });
+  }
+
+  // A.2 LECTURA COMPLETA: Base de Datos de Votantes (Censo)
+  if (action === "getVoters" || action === "getCensus") {
+    var sheet = findSheet(ss, ["Votantes", "Censo_Estudiantil", "Censo Estudiantil", "Censo", "Estudiantes", "Alumnos", "Sheet1", "Hoja 1"]);
+    var rows = sheet.getDataRange().getValues();
+    var students = parseVoterRows(rows);
     return respondJSON({ success: true, count: students.length, students: students });
   }
 
   // B. LECTURA: Base de Datos de Candidatos
   if (action === "getCandidates") {
-    var sheet = ss.getSheetByName("Candidatos") || ss.insertSheet("Candidatos");
+    var sheet = findSheet(ss, ["Candidatos", "Candidates", "Tarjeton", "Tarjetón"]);
     var rows = sheet.getDataRange().getValues();
     if (rows.length <= 1) return respondJSON({ success: true, count: 0, candidates: [] });
     var candidates = [];
     for (var i = 1; i < rows.length; i++) {
       var r = rows[i];
-      if (!r[0]) continue;
+      if (!r[0] && !r[2]) continue;
       candidates.push({
-        id: String(r[0]),
-        positionId: String(r[1]),
-        fullName: String(r[2]),
+        id: String(r[0] || ('cand-' + i)),
+        positionId: String(r[1] || 'personero'),
+        fullName: String(r[2] || ''),
         number: Number(r[3]) || 0,
         grade: String(r[4] || ""),
         group: String(r[5] || ""),
@@ -364,15 +470,15 @@ function doGet(e) {
 
   // C. LECTURA: Base de Datos de Jurados
   if (action === "getJurados") {
-    var sheet = ss.getSheetByName("Jurados") || ss.insertSheet("Jurados");
+    var sheet = findSheet(ss, ["Jurados", "Jurados_Votacion", "Mesas"]);
     var rows = sheet.getDataRange().getValues();
     if (rows.length <= 1) return respondJSON({ success: true, count: 0, jurados: [] });
     var jurados = [];
     for (var i = 1; i < rows.length; i++) {
       var r = rows[i];
-      if (!r[0]) continue;
+      if (!r[0] && !r[2]) continue;
       jurados.push({
-        id: String(r[0]),
+        id: String(r[0] || ('jur-' + i)),
         mesaNumber: Number(r[1]) || 1,
         fullName: String(r[2] || ""),
         role: String(r[3] || "PRESIDENTE_MESA"),
@@ -385,19 +491,19 @@ function doGet(e) {
 
   // D. LECTURA: Base de Datos de Administradores
   if (action === "getAdmins") {
-    var sheet = ss.getSheetByName("Administradores") || ss.insertSheet("Administradores");
+    var sheet = findSheet(ss, ["Administradores", "Admins", "Supervisores"]);
     var rows = sheet.getDataRange().getValues();
     if (rows.length <= 1) return respondJSON({ success: true, count: 0, admins: [] });
     var admins = [];
     for (var i = 1; i < rows.length; i++) {
       var r = rows[i];
-      if (!r[0]) continue;
+      if (!r[0] && !r[1]) continue;
       admins.push({
-        id: String(r[0]),
+        id: String(r[0] || ('adm-' + i)),
         fullName: String(r[1] || ""),
         username: String(r[2] || "admin"),
         pin: String(r[3] || "admin2026"),
-        role: String(r[4] || "SUPERADMIN"),
+        role: String(r[4] || "SUPER_ADMIN"),
         status: String(r[5] || "ACTIVO")
       });
     }
@@ -406,10 +512,10 @@ function doGet(e) {
 
   // E. LECTURA INTEGRAL DE TODAS LAS 4 BASES DE DATOS
   if (action === "getAllData") {
-    var vSheet = ss.getSheetByName("Votantes") || ss.getSheetByName("Censo_Estudiantil");
-    var cSheet = ss.getSheetByName("Candidatos");
-    var jSheet = ss.getSheetByName("Jurados");
-    var aSheet = ss.getSheetByName("Administradores");
+    var vSheet = findSheet(ss, ["Votantes", "Censo_Estudiantil", "Censo Estudiantil", "Censo", "Estudiantes"]);
+    var cSheet = findSheet(ss, ["Candidatos", "Candidates"]);
+    var jSheet = findSheet(ss, ["Jurados", "Jurados_Votacion"]);
+    var aSheet = findSheet(ss, ["Administradores", "Admins"]);
 
     return respondJSON({
       success: true,
@@ -442,10 +548,10 @@ function doPost(e) {
 
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheetVotantes = ss.getSheetByName("Votantes") || ss.getSheetByName("Censo_Estudiantil") || ss.insertSheet("Votantes");
-    var sheetCandidatos = ss.getSheetByName("Candidatos") || ss.insertSheet("Candidatos");
-    var sheetJurados = ss.getSheetByName("Jurados") || ss.insertSheet("Jurados");
-    var sheetAdmins = ss.getSheetByName("Administradores") || ss.insertSheet("Administradores");
+    var sheetVotantes = findSheet(ss, ["Votantes", "Censo_Estudiantil", "Censo Estudiantil", "Censo", "Estudiantes"]);
+    var sheetCandidatos = findSheet(ss, ["Candidatos", "Candidates", "Tarjeton"]);
+    var sheetJurados = findSheet(ss, ["Jurados", "Jurados_Votacion", "Mesas"]);
+    var sheetAdmins = findSheet(ss, ["Administradores", "Admins", "Supervisores"]);
     var sheetUrna = ss.getSheetByName("Urna_Cifrada") || ss.insertSheet("Urna_Cifrada");
 
     var contents = e.postData.contents;
@@ -608,9 +714,18 @@ function doPost(e) {
       ]);
 
       if (data.studentDoc) {
+        var cleanTarget = String(data.studentDoc).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().trim();
         var cData = sheetVotantes.getDataRange().getValues();
         for (var r = 1; r < cData.length; r++) {
-          if (String(cData[r][1]) === String(data.studentDoc)) {
+          var matchedRow = false;
+          for (var c = 0; c < Math.min(3, cData[r].length); c++) {
+            var cellClean = String(cData[r][c]).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().trim();
+            if (cellClean === cleanTarget) {
+              matchedRow = true;
+              break;
+            }
+          }
+          if (matchedRow) {
             sheetVotantes.getRange(r + 1, 8).setValue(true);
             sheetVotantes.getRange(r + 1, 9).setValue(now.toISOString());
             if (data.folioNumber) sheetVotantes.getRange(r + 1, 10).setValue(data.folioNumber);

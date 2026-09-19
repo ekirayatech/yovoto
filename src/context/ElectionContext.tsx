@@ -23,6 +23,8 @@ import {
 } from '../types/election';
 import { calculateBlockHash, generateFolioCode, sha256, simpleFastHash } from '../utils/crypto';
 import {
+  lookupVoterInSheets,
+  normalizeDocumentNumber,
   readAdminsFromSheets,
   readAllFromSheets,
   readCandidatesFromSheets,
@@ -80,7 +82,7 @@ interface ElectionContextType {
   logoutJurado: () => void;
 
   // Actions
-  authenticateStudent: (docType: DocumentType, docNumber: string) => { success: boolean; student?: Student; error?: string };
+  authenticateStudent: (docType: DocumentType, docNumber: string) => Promise<{ success: boolean; student?: Student; error?: string }>;
   verifyStudentAtMesa: (studentId: string, juradoName: string) => boolean;
   castVote: (selectedCandidates: Record<string, string>) => Promise<{ success: boolean; certificate?: VotingCertificate; error?: string }>;
   updateElectionStatus: (status: ElectionStatus) => void;
@@ -372,10 +374,31 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const res = await fetch('/api/election/state');
       if (res.ok) {
         const data = await res.json();
-        if (data.config) setConfig(data.config);
+        if (data.config) {
+          setConfig(prev => {
+            const hasCustomSheets = prev.googleSheets?.scriptUrl && !prev.googleSheets.scriptUrl.includes('voto_ekiraya');
+            const serverHasMock = !data.config.googleSheets?.scriptUrl || data.config.googleSheets.scriptUrl.includes('voto_ekiraya');
+            if (hasCustomSheets && serverHasMock) {
+              fetch('/api/election/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config: prev })
+              }).catch(() => {});
+              return { ...data.config, googleSheets: prev.googleSheets };
+            }
+            return data.config;
+          });
+        }
         if (data.positions) setPositions(data.positions);
         if (data.candidates) setCandidates(data.candidates);
-        if (data.students) setStudents(data.students);
+        if (data.students && data.students.length > 0) {
+          setStudents(prev => {
+            if (prev.length > data.students.length) return prev;
+            return data.students;
+          });
+        }
+        if (data.jurados && data.jurados.length > 0) setJurados(data.jurados);
+        if (data.admins && data.admins.length > 0) setAdmins(data.admins);
         if (data.votes) setVotes(data.votes);
         if (data.auditLogs) setAuditLogs(data.auditLogs);
         if (data.terminalsCount) setConnectedComputersCount(data.terminalsCount);
@@ -491,6 +514,21 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           } catch (err) {
             console.error('Error procesando status_changed:', err);
           }
+        });
+
+        sse.addEventListener('students_synced', () => {
+          refreshServerState();
+        });
+
+        sse.addEventListener('all_synced', () => {
+          refreshServerState();
+        });
+
+        sse.addEventListener('config_updated', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.config) setConfig(data.config);
+          } catch {}
         });
 
         sse.addEventListener('election_reset', (e: MessageEvent) => {
@@ -646,30 +684,104 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setAuditLogs(prev => [newLog, ...prev]);
   };
 
-  // Voter Authentication
-  const authenticateStudent = (docType: DocumentType, docNumber: string) => {
-    const trimmedNum = docNumber.trim();
-    const found = students.find(
-      s => s.documentType === docType && s.documentNumber.toLowerCase() === trimmedNum.toLowerCase()
-    );
+  // Voter Authentication (con normalización robusta y búsqueda en caliente contra Google Sheets)
+  const authenticateStudent = async (
+    docType: DocumentType,
+    docNumber: string
+  ): Promise<{ success: boolean; student?: Student; error?: string }> => {
+    const rawClean = normalizeDocumentNumber(docNumber);
+    if (!rawClean) {
+      return { success: false, error: 'Por favor ingrese un número de documento válido.' };
+    }
+
+    // 1. Búsqueda en censo local en memoria
+    let found = students.find(s => {
+      const sClean = normalizeDocumentNumber(s.documentNumber);
+      if (sClean !== rawClean) return false;
+      return !docType || s.documentType === docType;
+    });
+
+    // Fallback: coincidencia por número sin importar el tipo de documento
+    if (!found) {
+      found = students.find(s => normalizeDocumentNumber(s.documentNumber) === rawClean);
+    }
+
+    // 2. Si no se encontró localmente y Google Sheets está configurado, consultar en caliente
+    const sheetUrl = config.googleSheets?.scriptUrl;
+    const isRealSheet = sheetUrl && !sheetUrl.includes('voto_ekiraya');
+
+    if (!found && isRealSheet) {
+      try {
+        console.log(`[VoterAuth] Consultando documento ${rawClean} en Google Sheets...`);
+        // Intento 1: Búsqueda individual rápida en Google Sheets
+        const lookupRes = await lookupVoterInSheets(sheetUrl, docNumber, docType);
+        if (lookupRes.success && lookupRes.data?.found && lookupRes.data?.student) {
+          const s = lookupRes.data.student;
+          const mappedStudent: Student = {
+            id: s.id || `est-sheet-${Date.now()}`,
+            documentType: (s.documentType as DocumentType) || docType || 'TI',
+            documentNumber: String(s.documentNumber),
+            fullName: s.fullName || `Estudiante ${docNumber}`,
+            grade: s.grade || '',
+            group: s.group || '',
+            mesaNumber: Number(s.mesaNumber) || 1,
+            email: s.email || '',
+            hasVoted: Boolean(s.hasVoted),
+            votedAt: s.votedAt,
+            receiptFolio: s.receiptFolio,
+            isVerifiedByJurado: Boolean(s.hasVoted)
+          };
+
+          setStudents(prev => {
+            const exists = prev.some(p => normalizeDocumentNumber(p.documentNumber) === rawClean);
+            return exists ? prev : [mappedStudent, ...prev];
+          });
+
+          fetch('/api/election/add-student', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(mappedStudent)
+          }).catch(() => {});
+
+          found = mappedStudent;
+        } else {
+          // Intento 2: Recargar censo completo de Sheets (por si agregaron nuevos registros)
+          console.log('[VoterAuth] getVoter no encontró registro directo. Recargando censo completo de Sheets...');
+          const censusRes = await loadTableFromSheets('voters');
+          if (censusRes.success && censusRes.data && Array.isArray(censusRes.data)) {
+            const reFound = (censusRes.data as Student[]).find(
+              s => normalizeDocumentNumber(s.documentNumber) === rawClean
+            );
+            if (reFound) {
+              found = reFound;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error al verificar votante en Google Sheets:', err);
+      }
+    }
 
     if (!found) {
-      addAuditLog('SEGURIDAD_ALERTA', 'ESTUDIANTE', 'Terminal Votante', `Intento de ingreso con documento no censado: ${docType} ${trimmedNum}`);
-      return { success: false, error: 'El documento no se encuentra registrado en el censo electoral oficial.' };
+      addAuditLog('SEGURIDAD_ALERTA', 'ESTUDIANTE', 'Terminal Votante', `Intento de ingreso con documento no censado: ${docType} ${docNumber.trim()}`);
+      return {
+        success: false,
+        error: `El documento "${docNumber.trim()}" no se encuentra registrado en el censo electoral oficial. Verifique que el número coincida con la hoja de Google Sheets o solicite asistencia al jurado de mesa.`
+      };
     }
 
     if (found.hasVoted) {
       return {
         success: false,
         student: found,
-        error: `El estudiante ${found.fullName} ya ejerció su derecho al voto el ${new Date(found.votedAt || '').toLocaleTimeString('es-CO')}. Folio: ${found.receiptFolio || 'N/A'}.`
+        error: `El estudiante ${found.fullName} ya ejerció su derecho al voto el ${found.votedAt ? new Date(found.votedAt).toLocaleTimeString('es-CO') : 'en esta jornada'}. Folio: ${found.receiptFolio || 'N/A'}.`
       };
     }
 
     if (config.status !== 'ABIERTA') {
       return {
         success: false,
-        error: `La jornada electoral no está abierta actualmente. Estado: ${config.status}.`
+        error: `La jornada electoral no está abierta actualmente. Estado actual: ${config.status}.`
       };
     }
 
@@ -855,7 +967,15 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateInstitutionConfig = (patch: Partial<ElectionConfig>) => {
-    setConfig(prev => ({ ...prev, ...patch }));
+    setConfig(prev => {
+      const updated = { ...prev, ...patch };
+      fetch('/api/election/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: updated })
+      }).catch(err => console.warn('Error sincronizando config con servidor:', err));
+      return updated;
+    });
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', 'Actualización de configuración institucional.');
   };
 
@@ -1057,6 +1177,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               isVerifiedByJurado: Boolean(s.hasVoted)
             }));
             setStudents(mappedStudents);
+            fetch('/api/election/sync-students', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ students: mappedStudents })
+            }).catch(() => {});
             addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Censo de ${mappedStudents.length} votantes cargado exitosamente desde Google Sheets.`);
             return { success: true, message: `Se cargaron ${mappedStudents.length} votantes desde Sheets.`, count: mappedStudents.length, data: mappedStudents };
           }
@@ -1110,6 +1235,16 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (res.data.candidates?.length) setCandidates(res.data.candidates);
           if (res.data.jurados?.length) setJurados(res.data.jurados);
           if (res.data.admins?.length) setAdmins(res.data.admins);
+          fetch('/api/election/sync-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              students: res.data.students || [],
+              candidates: res.data.candidates || [],
+              jurados: res.data.jurados || [],
+              admins: res.data.admins || []
+            })
+          }).catch(() => {});
           addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', 'Sincronización completa de las 4 bases de datos leídas desde Google Sheets.');
           return { success: true, message: 'Las 4 bases de datos fueron leídas y cargadas con éxito.', data: res.data };
         }
