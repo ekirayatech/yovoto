@@ -1,0 +1,6 @@
+{
+  "name": "Sistema de Votación estudiantil colegio Ekirayá",
+  "description": "Sistema de Votación estudiantil colegio Ekirayá con autenticación por documento, tarjetón digital, resultados en tiempo real, actas E-14/E-24, certificado digital con QR y auditoría con cifrado.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
