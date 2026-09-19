@@ -1,4 +1,6 @@
 import {
+  AlertCircle,
+  Award,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -6,7 +8,9 @@ import {
   Copy,
   Database,
   ExternalLink,
+  Eye,
   FileSpreadsheet,
+  FileText,
   Github,
   Globe,
   HelpCircle,
@@ -17,9 +21,12 @@ import {
   RefreshCw,
   Send,
   Server,
+  Shield,
   ShieldCheck,
   Terminal,
   UploadCloud,
+  UserCheck,
+  Users,
   Zap
 } from 'lucide-react';
 import React, { useState } from 'react';
@@ -27,12 +34,33 @@ import { useElection } from '../../context/ElectionContext';
 import {
   diagnoseScriptUrl,
   normalizeScriptUrl,
+  readAdminsFromSheets,
+  readAllFromSheets,
+  readCandidatesFromSheets,
   readCensusFromSheets,
+  readJuradosFromSheets,
+  writeAdminsToSheets,
+  writeAllToSheets,
+  writeCandidatesToSheets,
+  writeJuradosToSheets,
+  writeVotersToSheets,
   writeVoteToSheets
 } from '../../utils/googleSheetsService';
 
 export const IntegrationsTab: React.FC = () => {
-  const { config, updateInstitutionConfig, syncWithGoogleSheets, votes, students } = useElection();
+  const {
+    config,
+    updateInstitutionConfig,
+    syncWithGoogleSheets,
+    votes,
+    students,
+    candidates,
+    jurados,
+    admins,
+    loadTableFromSheets,
+    syncTableToSheets
+  } = useElection();
+
   const [activeSubTab, setActiveSubTab] = useState<'sheets' | 'github' | 'vercel' | 'supabase'>('sheets');
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -44,9 +72,19 @@ export const IntegrationsTab: React.FC = () => {
   const [sheetId, setSheetId] = useState<string>(config.googleSheets.sheetId);
   const [autoSync, setAutoSync] = useState<boolean>(config.googleSheets.autoSync);
 
-  // Interactive Testing state
+  // 4 Databases Verification & Interactive Testing state
+  const [loadingTable, setLoadingTable] = useState<string | null>(null);
+  const [activeInspectorTable, setActiveInspectorTable] = useState<'voters' | 'candidates' | 'jurados' | 'admins'>('voters');
+  const [verificationFeedback, setVerificationFeedback] = useState<Record<string, { status: 'idle' | 'success' | 'error'; message: string; timestamp?: string }>>({
+    voters: { status: 'idle', message: 'Listo para verificar lectura y registro' },
+    candidates: { status: 'idle', message: 'Listo para verificar lectura y registro' },
+    jurados: { status: 'idle', message: 'Listo para verificar lectura y registro' },
+    admins: { status: 'idle', message: 'Listo para verificar lectura y registro' }
+  });
+
   const [testResult, setTestResult] = useState<{
     type: 'read' | 'write';
+    table?: string;
     status: 'loading' | 'success' | 'error';
     message: string;
     details?: string;
@@ -60,6 +98,19 @@ export const IntegrationsTab: React.FC = () => {
     navigator.clipboard.writeText(text);
     setCopiedSection(section);
     setTimeout(() => setCopiedSection(null), 2500);
+  };
+
+  const handleSyncNow = async () => {
+    setIsSyncing(true);
+    setSyncSuccessMsg(null);
+    try {
+      const res = await syncWithGoogleSheets();
+      if (res.success) {
+        setSyncSuccessMsg(`Sincronización exitosa: ${res.rowsSynced} votos y ${students.filter(s => s.hasVoted).length} sufragantes registrados en Google Sheets.`);
+      }
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleSaveSheetsConfig = (e: React.FormEvent) => {
@@ -88,232 +139,327 @@ export const IntegrationsTab: React.FC = () => {
     alert('Configuración de Supabase actualizada.');
   };
 
-  const handleSyncNow = async () => {
-    setIsSyncing(true);
-    setSyncSuccessMsg(null);
-    try {
-      const res = await syncWithGoogleSheets();
-      if (res.success) {
-        setSyncSuccessMsg(`Sincronización exitosa: ${res.rowsSynced} votos y ${students.filter(s => s.hasVoted).length} sufragantes registrados en Google Sheets.`);
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  // Test Real GET (Reading from Google Sheets)
-  const handleTestReadSheets = async () => {
+  // VERIFICAR LECTURA (GET) DE UNA TABLA ESPECÍFICA O TODAS
+  const handleVerifyRead = async (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => {
     const diag = diagnoseScriptUrl(scriptUrl);
     if (!diag.valid) {
       alert(diag.warning || 'Por favor ingrese la URL del Webhook de Google Apps Script primero.');
       return;
     }
 
+    setLoadingTable(`read-${table}`);
     setTestResult({
       type: 'read',
+      table,
       status: 'loading',
-      message: 'Consultando base de datos en Google Sheets (GET)...'
+      message: `Leyendo base de datos de ${table.toUpperCase()} desde Google Sheets (GET)...`
     });
 
     try {
-      const res = await readCensusFromSheets(scriptUrl);
+      const res = await loadTableFromSheets(table);
       if (res.success) {
+        const time = new Date().toLocaleTimeString();
+        if (table !== 'all') {
+          setVerificationFeedback(prev => ({
+            ...prev,
+            [table]: {
+              status: 'success',
+              message: `Leído exitosamente (${res.count ?? 'OK'} registros)`,
+              timestamp: time
+            }
+          }));
+        } else {
+          setVerificationFeedback({
+            voters: { status: 'success', message: 'Lectura integral OK', timestamp: time },
+            candidates: { status: 'success', message: 'Lectura integral OK', timestamp: time },
+            jurados: { status: 'success', message: 'Lectura integral OK', timestamp: time },
+            admins: { status: 'success', message: 'Lectura integral OK', timestamp: time }
+          });
+        }
+
         setTestResult({
           type: 'read',
+          table,
           status: 'success',
           message: res.message,
-          details: res.data ? JSON.stringify(res.data, null, 2) : res.details
+          details: res.data ? JSON.stringify(res.data, null, 2) : undefined
         });
       } else {
-        throw new Error(res.message || 'Error al conectar');
+        throw new Error(res.message);
       }
     } catch (err: any) {
+      if (table !== 'all') {
+        setVerificationFeedback(prev => ({
+          ...prev,
+          [table]: {
+            status: 'error',
+            message: err.message || 'Error en lectura',
+            timestamp: new Date().toLocaleTimeString()
+          }
+        }));
+      }
       setTestResult({
         type: 'read',
+        table,
         status: 'error',
-        message: err.message || 'No se pudo leer desde el Webhook de Google Sheets.',
-        details: 'Asegúrese de que el Apps Script esté implementado como Aplicación Web, con acceso para "Cualquiera" (Anyone).'
+        message: err.message || `No se pudo leer la tabla ${table} desde Google Sheets.`,
+        details: 'Asegúrese de haber implementado el código en Google Apps Script con acceso para "Cualquiera" (Anyone) y que la URL termine en /exec.'
       });
+    } finally {
+      setLoadingTable(null);
     }
   };
 
-  // Test Real POST (Writing to Google Sheets)
-  const handleTestWriteSheets = async () => {
+  // VERIFICAR REGISTRO / ESCRITURA (POST) DE UNA TABLA ESPECÍFICA O TODAS
+  const handleVerifyWrite = async (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => {
     const diag = diagnoseScriptUrl(scriptUrl);
     if (!diag.valid) {
       alert(diag.warning || 'Por favor ingrese la URL del Webhook de Google Apps Script primero.');
       return;
     }
 
+    setLoadingTable(`write-${table}`);
     setTestResult({
       type: 'write',
+      table,
       status: 'loading',
-      message: 'Transmitiendo paquete de prueba a Google Sheets (POST)...'
+      message: `Registrando base de datos de ${table.toUpperCase()} en Google Sheets (POST)...`
     });
 
     try {
-      const testPayload = {
-        action: 'castVote' as const,
-        voteToken: `TEST-${Date.now()}`,
-        positionId: 'personero',
-        candidateId: 'test-cand',
-        mesaNumber: 1,
-        studentDoc: 'TEST-001',
-        hash: 'sha256-test-hash-ekiraya',
-        timestamp: new Date().toISOString()
-      };
-
-      const res = await writeVoteToSheets(scriptUrl, testPayload);
+      const res = await syncTableToSheets(table);
       if (res.success) {
+        const time = new Date().toLocaleTimeString();
+        if (table !== 'all') {
+          setVerificationFeedback(prev => ({
+            ...prev,
+            [table]: {
+              status: 'success',
+              message: `Registrado exitosamente en Google Sheets`,
+              timestamp: time
+            }
+          }));
+        } else {
+          setVerificationFeedback({
+            voters: { status: 'success', message: 'Registrado en Sheets', timestamp: time },
+            candidates: { status: 'success', message: 'Registrado en Sheets', timestamp: time },
+            jurados: { status: 'success', message: 'Registrado en Sheets', timestamp: time },
+            admins: { status: 'success', message: 'Registrado en Sheets', timestamp: time }
+          });
+        }
+
         setTestResult({
           type: 'write',
+          table,
           status: 'success',
           message: res.message,
-          details: res.data ? JSON.stringify(res.data, null, 2) : res.details
+          details: `Operación POST confirmada por Google Apps Script. Hojas sincronizadas en Google Drive.`
         });
       } else {
-        throw new Error(res.message || 'Error al escribir');
+        throw new Error(res.message);
       }
     } catch (err: any) {
+      if (table !== 'all') {
+        setVerificationFeedback(prev => ({
+          ...prev,
+          [table]: {
+            status: 'error',
+            message: err.message || 'Error en registro',
+            timestamp: new Date().toLocaleTimeString()
+          }
+        }));
+      }
       setTestResult({
         type: 'write',
+        table,
         status: 'error',
-        message: err.message || 'No se pudo escribir en el Webhook de Google Sheets.',
-        details: 'Verifique que la URL termine en /exec y que los permisos permitan peticiones de "Cualquiera".'
+        message: err.message || `No se pudo registrar la tabla ${table} en Google Sheets.`,
+        details: 'Verifique que la URL termine en /exec y que los permisos permitan peticiones de "Cualquiera" (Anyone).'
       });
+    } finally {
+      setLoadingTable(null);
     }
   };
 
-  // Complete Google Apps Script supporting both Reading (doGet) and Writing (doPost)
+  // Complete Google Apps Script supporting the 4 Databases
   const GOOGLE_APPS_SCRIPT_CODE = `/**
+ * =========================================================================
  * SISTEMA DE VOTACIÓN ESTUDIANTIL COLEGIO EKIRAYÁ
- * Conector de Base de Datos Bidireccional (Lectura y Escritura) en Google Sheets
+ * Conector de 4 Bases de Datos (Lectura y Escritura) en Google Sheets:
+ * 1. Votantes (Censo Estudiantil)
+ * 2. Candidatos (Tarjetón Electoral)
+ * 3. Jurados (Acreditación y Mesas)
+ * 4. Administradores (Supervisores)
+ * + Urna Cifrada (Depósito Seguro de Votos)
+ * =========================================================================
  * 
- * INSTRUCCIONES:
+ * INSTRUCCIONES DE INSTALACIÓN:
  * 1. Cree una hoja de cálculo en Google Sheets (ej: "BD Electoral Ekiraya 2026").
  * 2. Vaya a: Extensiones > Apps Script.
- * 3. Reemplace todo el contenido con este código.
+ * 3. Reemplace TODO el contenido con este código y guarde (Ctrl+S).
  * 4. Haga clic en: Implementar > Nueva implementación.
- * 5. Tipo: "Aplicación web".
+ * 5. Tipo de implementación: "Aplicación web".
  * 6. Ejecutar como: "Yo" (su correo de Google).
- * 7. Quién tiene acceso: "Cualquiera" (Anyone - Muy importante para permitir peticiones).
- * 8. Copie la URL de la aplicación web y péguela en el sistema electoral.
+ * 7. Quién tiene acceso: "Cualquiera" (Anyone - Requisito fundamental).
+ * 8. Copie la URL generada (terminada en /exec) y péguela en el sistema.
  */
 
+// -------------------------------------------------------------------------
 // 1. LECTURA DESDE LA BASE DE DATOS (GET)
+// -------------------------------------------------------------------------
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "health";
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  if (action === "getCensus") {
-    // Lee la hoja Censo_Estudiantil y la entrega en formato JSON
-    var sheet = ss.getSheetByName("Censo_Estudiantil") || ss.insertSheet("Censo_Estudiantil");
+  // A. LECTURA: Base de Datos de Votantes (Censo)
+  if (action === "getVoters" || action === "getCensus") {
+    var sheet = ss.getSheetByName("Votantes") || ss.getSheetByName("Censo_Estudiantil") || ss.insertSheet("Votantes");
     var rows = sheet.getDataRange().getValues();
-    if (rows.length <= 1) {
-      return respondJSON({ success: true, count: 0, students: [] });
-    }
-    var headers = rows[0];
+    if (rows.length <= 1) return respondJSON({ success: true, count: 0, students: [] });
     var students = [];
     for (var i = 1; i < rows.length; i++) {
-      var row = rows[i];
+      var r = rows[i];
+      if (!r[1]) continue;
       students.push({
-        documentType: row[0] || "TI",
-        documentNumber: String(row[1]),
-        fullName: row[2],
-        grade: row[3],
-        group: row[4],
-        mesaNumber: Number(row[5]) || 1,
-        email: row[6] || "",
-        hasVoted: row[7] === true || String(row[7]).toUpperCase() === "SI" || String(row[7]).toUpperCase() === "TRUE"
+        documentType: r[0] || "TI",
+        documentNumber: String(r[1]),
+        fullName: r[2] || "",
+        grade: r[3] || "",
+        group: r[4] || "",
+        mesaNumber: Number(r[5]) || 1,
+        email: r[6] || "",
+        hasVoted: r[7] === true || String(r[7]).toUpperCase() === "SI" || String(r[7]).toUpperCase() === "TRUE",
+        votedAt: r[8] || "",
+        receiptFolio: r[9] || ""
       });
     }
     return respondJSON({ success: true, count: students.length, students: students });
   }
 
-  if (action === "getVotes") {
-    // Lee la Urna Cifrada (para auditoría y balance)
-    var sheetVotes = ss.getSheetByName("Urna_Cifrada") || ss.insertSheet("Urna_Cifrada");
-    var voteRows = sheetVotes.getDataRange().getValues();
+  // B. LECTURA: Base de Datos de Candidatos
+  if (action === "getCandidates") {
+    var sheet = ss.getSheetByName("Candidatos") || ss.insertSheet("Candidatos");
+    var rows = sheet.getDataRange().getValues();
+    if (rows.length <= 1) return respondJSON({ success: true, count: 0, candidates: [] });
+    var candidates = [];
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r[0]) continue;
+      candidates.push({
+        id: String(r[0]),
+        positionId: String(r[1]),
+        fullName: String(r[2]),
+        number: Number(r[3]) || 0,
+        grade: String(r[4] || ""),
+        group: String(r[5] || ""),
+        lema: String(r[6] || ""),
+        color: String(r[7] || "#1e3a8a"),
+        photoUrl: String(r[8] || ""),
+        proposals: r[9] ? String(r[9]).split(";") : [],
+        isBlankVote: r[10] === true || String(r[10]).toUpperCase() === "SI" || String(r[10]).toUpperCase() === "TRUE"
+      });
+    }
+    return respondJSON({ success: true, count: candidates.length, candidates: candidates });
+  }
+
+  // C. LECTURA: Base de Datos de Jurados
+  if (action === "getJurados") {
+    var sheet = ss.getSheetByName("Jurados") || ss.insertSheet("Jurados");
+    var rows = sheet.getDataRange().getValues();
+    if (rows.length <= 1) return respondJSON({ success: true, count: 0, jurados: [] });
+    var jurados = [];
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r[0]) continue;
+      jurados.push({
+        id: String(r[0]),
+        mesaNumber: Number(r[1]) || 1,
+        fullName: String(r[2] || ""),
+        role: String(r[3] || "PRESIDENTE_MESA"),
+        pin: String(r[4] || "jurado2026"),
+        status: String(r[5] || "ACTIVO")
+      });
+    }
+    return respondJSON({ success: true, count: jurados.length, jurados: jurados });
+  }
+
+  // D. LECTURA: Base de Datos de Administradores
+  if (action === "getAdmins") {
+    var sheet = ss.getSheetByName("Administradores") || ss.insertSheet("Administradores");
+    var rows = sheet.getDataRange().getValues();
+    if (rows.length <= 1) return respondJSON({ success: true, count: 0, admins: [] });
+    var admins = [];
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r[0]) continue;
+      admins.push({
+        id: String(r[0]),
+        fullName: String(r[1] || ""),
+        username: String(r[2] || "admin"),
+        pin: String(r[3] || "admin2026"),
+        role: String(r[4] || "SUPERADMIN"),
+        status: String(r[5] || "ACTIVO")
+      });
+    }
+    return respondJSON({ success: true, count: admins.length, admins: admins });
+  }
+
+  // E. LECTURA INTEGRAL DE TODAS LAS 4 BASES DE DATOS
+  if (action === "getAllData") {
+    var vSheet = ss.getSheetByName("Votantes") || ss.getSheetByName("Censo_Estudiantil");
+    var cSheet = ss.getSheetByName("Candidatos");
+    var jSheet = ss.getSheetByName("Jurados");
+    var aSheet = ss.getSheetByName("Administradores");
+
     return respondJSON({
       success: true,
-      totalVotes: Math.max(0, voteRows.length - 1),
-      lastUpdated: new Date().toISOString()
+      institution: "Colegio Bilingüe Ekirayá",
+      counts: {
+        voters: vSheet ? Math.max(0, vSheet.getLastRow() - 1) : 0,
+        candidates: cSheet ? Math.max(0, cSheet.getLastRow() - 1) : 0,
+        jurados: jSheet ? Math.max(0, jSheet.getLastRow() - 1) : 0,
+        admins: aSheet ? Math.max(0, aSheet.getLastRow() - 1) : 0
+      },
+      timestamp: new Date().toISOString()
     });
   }
 
-  // Ping de salud por defecto
+  // Ping de Conectividad
   return respondJSON({
     status: "SUCCESS",
     institution: "Colegio Bilingüe Ekirayá",
-    message: "Conexión activa con Google Sheets como Base de Datos Electoral",
+    message: "Conexión activa con Google Sheets como Base de Datos Electoral de 4 Módulos",
     timestamp: new Date().toISOString()
   });
 }
 
-// 2. ESCRITURA EN LA BASE DE DATOS (POST)
+// -------------------------------------------------------------------------
+// 2. ESCRITURA Y REGISTRO EN LA BASE DE DATOS (POST)
+// -------------------------------------------------------------------------
 function doPost(e) {
   var lock = LockService.getScriptLock();
-  // Esperar hasta 15 segundos para asegurar concurrencia sin choques
   lock.tryLock(15000);
 
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheetVotos = ss.getSheetByName("Urna_Cifrada") || ss.insertSheet("Urna_Cifrada");
-    var sheetCenso = ss.getSheetByName("Censo_Estudiantil") || ss.insertSheet("Censo_Estudiantil");
-    var sheetAudit = ss.getSheetByName("Auditoria_Logs") || ss.insertSheet("Auditoria_Logs");
-
-    // Inicializar encabezados si las hojas están vacías
-    if (sheetVotos.getLastRow() === 0) {
-      sheetVotos.appendRow(["Fecha y Hora", "Cargo", "Candidato ID", "Mesa", "Token Voto Cifrado", "Hash SHA-256"]);
-    }
-    if (sheetCenso.getLastRow() === 0) {
-      sheetCenso.appendRow(["Tipo Doc", "Número Documento", "Nombre Completo", "Grado", "Grupo", "Mesa", "Email", "Ha Votado", "Fecha Voto", "Folio Certificado"]);
-    }
+    var sheetVotantes = ss.getSheetByName("Votantes") || ss.getSheetByName("Censo_Estudiantil") || ss.insertSheet("Votantes");
+    var sheetCandidatos = ss.getSheetByName("Candidatos") || ss.insertSheet("Candidatos");
+    var sheetJurados = ss.getSheetByName("Jurados") || ss.insertSheet("Jurados");
+    var sheetAdmins = ss.getSheetByName("Administradores") || ss.insertSheet("Administradores");
+    var sheetUrna = ss.getSheetByName("Urna_Cifrada") || ss.insertSheet("Urna_Cifrada");
 
     var contents = e.postData.contents;
     var data = JSON.parse(contents);
     var now = new Date();
 
-    // A. Registrar Voto Cifrado (Urna)
-    if (data.action === "castVote" || data.voteToken) {
-      sheetVotos.appendRow([
-        now,
-        data.positionId || "N/A",
-        data.candidateId || "N/A",
-        data.mesaNumber || 1,
-        data.voteToken || ("TOK-" + now.getTime()),
-        data.hash || "SHA256-PENDING"
-      ]);
-
-      // Si se envía documento del estudiante, marcarlo como sufragado en Censo_Estudiantil
-      if (data.studentDoc) {
-        var censoData = sheetCenso.getDataRange().getValues();
-        for (var r = 1; r < censoData.length; r++) {
-          if (String(censoData[r][1]) === String(data.studentDoc)) {
-            sheetCenso.getRange(r + 1, 8).setValue(true); // Ha Votado = true
-            sheetCenso.getRange(r + 1, 9).setValue(now.toISOString()); // Fecha
-            if (data.folioNumber) {
-              sheetCenso.getRange(r + 1, 10).setValue(data.folioNumber);
-            }
-            break;
-          }
-        }
-      }
-
-      return respondJSON({
-        status: "SUCCESS",
-        message: "Voto registrado y censo actualizado en Google Sheets",
-        timestamp: now.toISOString()
-      });
-    }
-
-    // B. Cargar o Actualizar Censo Masivo
-    if (data.action === "syncCensus" && Array.isArray(data.students)) {
-      sheetCenso.clearContents();
-      sheetCenso.appendRow(["Tipo Doc", "Número Documento", "Nombre Completo", "Grado", "Grupo", "Mesa", "Email", "Ha Votado", "Fecha Voto", "Folio Certificado"]);
-      var batch = [];
-      data.students.forEach(function(s) {
-        batch.push([
+    // 1. REGISTRAR: Votantes
+    if (data.action === "syncVoters" || data.action === "syncCensus") {
+      var students = data.students || data.items || [];
+      sheetVotantes.clearContents();
+      sheetVotantes.appendRow(["Tipo Doc", "Número Documento", "Nombre Completo", "Grado", "Grupo", "Mesa", "Email", "Ha Votado", "Fecha Voto", "Folio Certificado"]);
+      var rows = [];
+      students.forEach(function(s) {
+        rows.push([
           s.documentType || "TI",
           String(s.documentNumber),
           s.fullName,
@@ -326,17 +472,157 @@ function doPost(e) {
           s.receiptFolio || ""
         ]);
       });
-      if (batch.length > 0) {
-        sheetCenso.getRange(2, 1, batch.length, 10).setValues(batch);
+      if (rows.length > 0) {
+        sheetVotantes.getRange(2, 1, rows.length, 10).setValues(rows);
       }
+      return respondJSON({ status: "SUCCESS", message: "Base de Datos de Votantes registrada con " + rows.length + " estudiantes." });
+    }
+
+    // 2. REGISTRAR: Candidatos
+    if (data.action === "syncCandidates") {
+      var candidates = data.candidates || data.items || [];
+      sheetCandidatos.clearContents();
+      sheetCandidatos.appendRow(["ID", "Cargo", "Nombre Completo", "Número Tarjetón", "Grado", "Grupo", "Lema de Campaña", "Color Hex", "Foto URL", "Propuestas", "Voto en Blanco"]);
+      var rows = [];
+      candidates.forEach(function(c) {
+        rows.push([
+          c.id,
+          c.positionId,
+          c.fullName,
+          c.number || 0,
+          c.grade || "",
+          c.group || "",
+          c.lema || "",
+          c.color || "#1e3a8a",
+          c.photoUrl || "",
+          (c.proposals || []).join(";"),
+          c.isBlankVote ? true : false
+        ]);
+      });
+      if (rows.length > 0) {
+        sheetCandidatos.getRange(2, 1, rows.length, 11).setValues(rows);
+      }
+      return respondJSON({ status: "SUCCESS", message: "Base de Datos de Candidatos registrada con " + rows.length + " candidatos." });
+    }
+
+    // 3. REGISTRAR: Jurados
+    if (data.action === "syncJurados") {
+      var jurados = data.jurados || data.items || [];
+      sheetJurados.clearContents();
+      sheetJurados.appendRow(["ID", "Mesa", "Nombre Completo", "Rol", "PIN de Acceso", "Estado"]);
+      var rows = [];
+      jurados.forEach(function(j) {
+        rows.push([
+          j.id,
+          j.mesaNumber || 1,
+          j.fullName,
+          j.role || "PRESIDENTE_MESA",
+          j.pin || "jurado2026",
+          j.status || "ACTIVO"
+        ]);
+      });
+      if (rows.length > 0) {
+        sheetJurados.getRange(2, 1, rows.length, 6).setValues(rows);
+      }
+      return respondJSON({ status: "SUCCESS", message: "Base de Datos de Jurados registrada con " + rows.length + " jurados." });
+    }
+
+    // 4. REGISTRAR: Administradores
+    if (data.action === "syncAdmins") {
+      var admins = data.admins || data.items || [];
+      sheetAdmins.clearContents();
+      sheetAdmins.appendRow(["ID", "Nombre Completo", "Usuario", "PIN de Acceso", "Rol", "Estado"]);
+      var rows = [];
+      admins.forEach(function(a) {
+        rows.push([
+          a.id,
+          a.fullName,
+          a.username,
+          a.pin || "admin2026",
+          a.role || "SUPERADMIN",
+          a.status || "ACTIVO"
+        ]);
+      });
+      if (rows.length > 0) {
+        sheetAdmins.getRange(2, 1, rows.length, 6).setValues(rows);
+      }
+      return respondJSON({ status: "SUCCESS", message: "Base de Datos de Administradores registrada con " + rows.length + " administradores." });
+    }
+
+    // 5. REGISTRAR TODO (ALL DATA)
+    if (data.action === "syncAll") {
+      if (data.students) {
+        sheetVotantes.clearContents();
+        sheetVotantes.appendRow(["Tipo Doc", "Número Documento", "Nombre Completo", "Grado", "Grupo", "Mesa", "Email", "Ha Votado", "Fecha Voto", "Folio Certificado"]);
+        var vRows = data.students.map(function(s) {
+          return [s.documentType || "TI", String(s.documentNumber), s.fullName, s.grade, s.group, s.mesaNumber || 1, s.email || "", s.hasVoted ? true : false, s.votedAt || "", s.receiptFolio || ""];
+        });
+        if (vRows.length > 0) sheetVotantes.getRange(2, 1, vRows.length, 10).setValues(vRows);
+      }
+
+      if (data.candidates) {
+        sheetCandidatos.clearContents();
+        sheetCandidatos.appendRow(["ID", "Cargo", "Nombre Completo", "Número Tarjetón", "Grado", "Grupo", "Lema de Campaña", "Color Hex", "Foto URL", "Propuestas", "Voto en Blanco"]);
+        var cRows = data.candidates.map(function(c) {
+          return [c.id, c.positionId, c.fullName, c.number || 0, c.grade || "", c.group || "", c.lema || "", c.color || "#1e3a8a", c.photoUrl || "", (c.proposals || []).join(";"), c.isBlankVote ? true : false];
+        });
+        if (cRows.length > 0) sheetCandidatos.getRange(2, 1, cRows.length, 11).setValues(cRows);
+      }
+
+      if (data.jurados) {
+        sheetJurados.clearContents();
+        sheetJurados.appendRow(["ID", "Mesa", "Nombre Completo", "Rol", "PIN de Acceso", "Estado"]);
+        var jRows = data.jurados.map(function(j) {
+          return [j.id, j.mesaNumber || 1, j.fullName, j.role || "PRESIDENTE_MESA", j.pin || "jurado2026", j.status || "ACTIVO"];
+        });
+        if (jRows.length > 0) sheetJurados.getRange(2, 1, jRows.length, 6).setValues(jRows);
+      }
+
+      if (data.admins) {
+        sheetAdmins.clearContents();
+        sheetAdmins.appendRow(["ID", "Nombre Completo", "Usuario", "PIN de Acceso", "Rol", "Estado"]);
+        var aRows = data.admins.map(function(a) {
+          return [a.id, a.fullName, a.username, a.pin || "admin2026", a.role || "SUPERADMIN", a.status || "ACTIVO"];
+        });
+        if (aRows.length > 0) sheetAdmins.getRange(2, 1, aRows.length, 6).setValues(aRows);
+      }
+
       return respondJSON({
         status: "SUCCESS",
-        message: "Censo de " + batch.length + " estudiantes sincronizado en Sheets"
+        message: "Las 4 Bases de Datos fueron registradas y sincronizadas con éxito en Google Sheets."
       });
     }
 
-    return respondJSON({ status: "SUCCESS", message: "Operación completada" });
+    // 6. DEPÓSITO DE VOTO INDIVIDUAL
+    if (data.action === "castVote" || data.voteToken) {
+      if (sheetUrna.getLastRow() === 0) {
+        sheetUrna.appendRow(["Fecha y Hora", "Cargo", "Candidato ID", "Mesa", "Token Voto Cifrado", "Hash SHA-256"]);
+      }
+      sheetUrna.appendRow([
+        now,
+        data.positionId || "N/A",
+        data.candidateId || "N/A",
+        data.mesaNumber || 1,
+        data.voteToken || ("TOK-" + now.getTime()),
+        data.hash || "SHA256-PENDING"
+      ]);
 
+      if (data.studentDoc) {
+        var cData = sheetVotantes.getDataRange().getValues();
+        for (var r = 1; r < cData.length; r++) {
+          if (String(cData[r][1]) === String(data.studentDoc)) {
+            sheetVotantes.getRange(r + 1, 8).setValue(true);
+            sheetVotantes.getRange(r + 1, 9).setValue(now.toISOString());
+            if (data.folioNumber) sheetVotantes.getRange(r + 1, 10).setValue(data.folioNumber);
+            break;
+          }
+        }
+      }
+
+      return respondJSON({ status: "SUCCESS", message: "Voto depositado en Urna_Cifrada de Google Sheets." });
+    }
+
+    return respondJSON({ status: "SUCCESS", message: "Operación procesada en Google Sheets." });
   } catch (err) {
     return respondJSON({ status: "ERROR", message: err.toString() });
   } finally {
@@ -507,33 +793,381 @@ function respondJSON(obj) {
               </div>
             </form>
 
-            {/* Test Interactive Buttons */}
-            <div className="mt-5 p-4 rounded-xl bg-white border border-slate-200">
-              <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block mb-3">
-                Pruebas de Conexión en Vivo (Lectura y Escritura):
-              </span>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={handleTestReadSheets}
-                  className="px-3.5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100 rounded-xl font-bold text-xs flex items-center gap-2 transition-colors"
-                >
-                  <Play className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>1. Probar Lectura (GET Censo)</span>
-                </button>
+            {/* 4 DATABASES VERIFICATION STATION */}
+            <div className="mt-6 p-5 rounded-2xl bg-white border border-slate-200 shadow-xs space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg">
+                      <Database className="w-4 h-4" />
+                    </span>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Tablero de Verificación: 4 Bases de Datos en Google Sheets
+                    </h4>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Comprueba en tiempo real que el sistema <strong>lee (GET)</strong> y <strong>registra (POST)</strong> cada una de las 4 entidades requeridas.
+                  </p>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={handleTestWriteSheets}
-                  className="px-3.5 py-2 bg-purple-50 text-purple-800 border border-purple-300 hover:bg-purple-100 rounded-xl font-bold text-xs flex items-center gap-2 transition-colors"
-                >
-                  <Send className="w-3.5 h-3.5 text-purple-600" />
-                  <span>2. Probar Escritura (POST Voto)</span>
-                </button>
+                {/* Master Actions */}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleVerifyRead('all')}
+                    disabled={loadingTable !== null}
+                    className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    {loadingTable === 'read-all' ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-700" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 text-emerald-700" />
+                    )}
+                    <span>Leer Todo (GET 4 BDs)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleVerifyWrite('all')}
+                    disabled={loadingTable !== null}
+                    className="px-3 py-2 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+                  >
+                    {loadingTable === 'write-all' ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                    ) : (
+                      <UploadCloud className="w-3.5 h-3.5 text-white" />
+                    )}
+                    <span>Registrar Todo (POST 4 BDs)</span>
+                  </button>
+                </div>
               </div>
 
+              {/* 4 Interactive Verification Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* 1. VOTANTES */}
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition-colors flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="p-1 rounded-md bg-blue-100 text-blue-800">
+                          <Users className="w-3.5 h-3.5" />
+                        </span>
+                        <span className="font-bold text-xs text-slate-800">1. Votantes</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                        {students.length} reg
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-500 mb-2">
+                      Censo estudiantil: sufragantes, grado, grupo, mesa y estado de voto.
+                    </p>
+
+                    <div className="text-[10px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200 mb-3 space-y-1">
+                      <div className="flex justify-between">
+                        <span>Han votado:</span>
+                        <strong className="text-emerald-600">{students.filter(s => s.hasVoted).length}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Pendientes:</span>
+                        <strong className="text-slate-700">{students.filter(s => !s.hasVoted).length}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[10px] font-medium text-slate-500 mb-2 truncate">
+                      {verificationFeedback.voters?.status === 'success' && (
+                        <span className="text-emerald-700 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 inline" /> {verificationFeedback.voters.message}
+                        </span>
+                      )}
+                      {verificationFeedback.voters?.status === 'error' && (
+                        <span className="text-rose-700 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 inline" /> {verificationFeedback.voters.message}
+                        </span>
+                      )}
+                      {verificationFeedback.voters?.status === 'idle' && (
+                        <span>Listo para verificar</span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyRead('voters')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-bold text-[11px] text-slate-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'read-voters' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-slate-700" />
+                        ) : (
+                          <Play className="w-3 h-3 text-emerald-600" />
+                        )}
+                        <span>Leer</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyWrite('voters')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'write-voters' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-white" />
+                        ) : (
+                          <Send className="w-3 h-3 text-white" />
+                        )}
+                        <span>Registrar</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. CANDIDATOS */}
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition-colors flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="p-1 rounded-md bg-purple-100 text-purple-800">
+                          <Award className="w-3.5 h-3.5" />
+                        </span>
+                        <span className="font-bold text-xs text-slate-800">2. Candidatos</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                        {candidates.length} reg
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-500 mb-2">
+                      Tarjetón electoral: cargos (Personero, Contralor), número, propuestas y lema.
+                    </p>
+
+                    <div className="text-[10px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200 mb-3 space-y-1">
+                      <div className="flex justify-between">
+                        <span>Postulados:</span>
+                        <strong className="text-purple-700">{candidates.filter(c => !c.isBlankVote).length}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Votos en blanco:</span>
+                        <strong className="text-slate-700">{candidates.filter(c => c.isBlankVote).length}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[10px] font-medium text-slate-500 mb-2 truncate">
+                      {verificationFeedback.candidates?.status === 'success' && (
+                        <span className="text-emerald-700 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 inline" /> {verificationFeedback.candidates.message}
+                        </span>
+                      )}
+                      {verificationFeedback.candidates?.status === 'error' && (
+                        <span className="text-rose-700 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 inline" /> {verificationFeedback.candidates.message}
+                        </span>
+                      )}
+                      {verificationFeedback.candidates?.status === 'idle' && (
+                        <span>Listo para verificar</span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyRead('candidates')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-bold text-[11px] text-slate-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'read-candidates' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-slate-700" />
+                        ) : (
+                          <Play className="w-3 h-3 text-purple-600" />
+                        )}
+                        <span>Leer</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyWrite('candidates')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'write-candidates' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-white" />
+                        ) : (
+                          <Send className="w-3 h-3 text-white" />
+                        )}
+                        <span>Registrar</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. JURADOS */}
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition-colors flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="p-1 rounded-md bg-amber-100 text-amber-800">
+                          <UserCheck className="w-3.5 h-3.5" />
+                        </span>
+                        <span className="font-bold text-xs text-slate-800">3. Jurados</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                        {jurados.length} reg
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-500 mb-2">
+                      Acreditación de mesas: nombres, mesa asignada, PIN de acceso y rol.
+                    </p>
+
+                    <div className="text-[10px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200 mb-3 space-y-1">
+                      <div className="flex justify-between">
+                        <span>Activos:</span>
+                        <strong className="text-amber-700">{jurados.filter(j => j.status === 'ACTIVO').length}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Mesas cubiertas:</span>
+                        <strong className="text-slate-700">{new Set(jurados.map(j => j.mesaNumber)).size}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[10px] font-medium text-slate-500 mb-2 truncate">
+                      {verificationFeedback.jurados?.status === 'success' && (
+                        <span className="text-emerald-700 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 inline" /> {verificationFeedback.jurados.message}
+                        </span>
+                      )}
+                      {verificationFeedback.jurados?.status === 'error' && (
+                        <span className="text-rose-700 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 inline" /> {verificationFeedback.jurados.message}
+                        </span>
+                      )}
+                      {verificationFeedback.jurados?.status === 'idle' && (
+                        <span>Listo para verificar</span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyRead('jurados')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-bold text-[11px] text-slate-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'read-jurados' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-slate-700" />
+                        ) : (
+                          <Play className="w-3 h-3 text-amber-600" />
+                        )}
+                        <span>Leer</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyWrite('jurados')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'write-jurados' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-white" />
+                        ) : (
+                          <Send className="w-3 h-3 text-white" />
+                        )}
+                        <span>Registrar</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. ADMINISTRADORES */}
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition-colors flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="p-1 rounded-md bg-indigo-100 text-indigo-800">
+                          <Shield className="w-3.5 h-3.5" />
+                        </span>
+                        <span className="font-bold text-xs text-slate-800">4. Administradores</span>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                        {admins.length} reg
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-500 mb-2">
+                      Supervisión electoral: usuario de ingreso, PIN de seguridad y rol directivo.
+                    </p>
+
+                    <div className="text-[10px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200 mb-3 space-y-1">
+                      <div className="flex justify-between">
+                        <span>Superadmins:</span>
+                        <strong className="text-indigo-700">{admins.filter(a => a.role === 'SUPER_ADMIN').length}</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Estado:</span>
+                        <strong className="text-emerald-600">Habilitados</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[10px] font-medium text-slate-500 mb-2 truncate">
+                      {verificationFeedback.admins?.status === 'success' && (
+                        <span className="text-emerald-700 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 inline" /> {verificationFeedback.admins.message}
+                        </span>
+                      )}
+                      {verificationFeedback.admins?.status === 'error' && (
+                        <span className="text-rose-700 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 inline" /> {verificationFeedback.admins.message}
+                        </span>
+                      )}
+                      {verificationFeedback.admins?.status === 'idle' && (
+                        <span>Listo para verificar</span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyRead('admins')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-bold text-[11px] text-slate-700 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'read-admins' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-slate-700" />
+                        ) : (
+                          <Play className="w-3 h-3 text-indigo-600" />
+                        )}
+                        <span>Leer</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleVerifyWrite('admins')}
+                        disabled={loadingTable !== null}
+                        className="py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {loadingTable === 'write-admins' ? (
+                          <RefreshCw className="w-3 h-3 animate-spin text-white" />
+                        ) : (
+                          <Send className="w-3 h-3 text-white" />
+                        )}
+                        <span>Registrar</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Output Console */}
               {testResult && (
-                <div className={`mt-3 p-3 rounded-xl text-xs font-mono border ${
+                <div className={`p-3.5 rounded-xl text-xs font-mono border ${
                   testResult.status === 'success'
                     ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
                     : testResult.status === 'loading'
@@ -543,15 +1177,195 @@ function respondJSON(obj) {
                   <div className="flex items-center gap-2 font-bold mb-1">
                     {testResult.status === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
                     {testResult.status === 'loading' && <RefreshCw className="w-4 h-4 animate-spin text-slate-600 shrink-0" />}
+                    {testResult.status === 'error' && <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
                     <span>{testResult.message}</span>
                   </div>
                   {testResult.details && (
-                    <pre className="mt-2 p-2 bg-black/5 rounded-lg text-[10px] overflow-x-auto max-h-32">
+                    <pre className="mt-2 p-2.5 bg-black/5 rounded-lg text-[10px] overflow-x-auto max-h-36">
                       {testResult.details}
                     </pre>
                   )}
                 </div>
               )}
+
+              {/* Live Data Inspector: Compare local database with Sheets */}
+              <div className="pt-4 border-t border-slate-100">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5 text-slate-600" />
+                    <span className="text-xs font-bold text-slate-800">
+                      Inspector de Datos en Vivo (Memoria del Sistema):
+                    </span>
+                  </div>
+
+                  {/* Inspector Tabs */}
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setActiveInspectorTable('voters')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${
+                        activeInspectorTable === 'voters'
+                          ? 'bg-white text-blue-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Votantes ({students.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveInspectorTable('candidates')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${
+                        activeInspectorTable === 'candidates'
+                          ? 'bg-white text-purple-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Candidatos ({candidates.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveInspectorTable('jurados')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${
+                        activeInspectorTable === 'jurados'
+                          ? 'bg-white text-amber-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Jurados ({jurados.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveInspectorTable('admins')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${
+                        activeInspectorTable === 'admins'
+                          ? 'bg-white text-indigo-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Admins ({admins.length})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Table Preview */}
+                <div className="border border-slate-200 rounded-xl overflow-x-auto max-h-48 text-[11px]">
+                  {activeInspectorTable === 'voters' && (
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0">
+                        <tr>
+                          <th className="p-2">Doc</th>
+                          <th className="p-2">Nombre</th>
+                          <th className="p-2">Grado/Grupo</th>
+                          <th className="p-2">Mesa</th>
+                          <th className="p-2">Estado</th>
+                          <th className="p-2">Folio</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {students.slice(0, 10).map(s => (
+                          <tr key={s.documentNumber} className="hover:bg-slate-50">
+                            <td className="p-2">{s.documentType} {s.documentNumber}</td>
+                            <td className="p-2 font-sans font-medium">{s.fullName}</td>
+                            <td className="p-2">{s.grade} - {s.group}</td>
+                            <td className="p-2">Mesa {s.mesaNumber}</td>
+                            <td className="p-2">
+                              {s.hasVoted ? (
+                                <span className="text-emerald-700 font-bold">VOTÓ</span>
+                              ) : (
+                                <span className="text-slate-500">PENDIENTE</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-slate-500">{s.receiptFolio || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+
+                  {activeInspectorTable === 'candidates' && (
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0">
+                        <tr>
+                          <th className="p-2">Cargo</th>
+                          <th className="p-2">N° Tarjetón</th>
+                          <th className="p-2">Nombre Completo</th>
+                          <th className="p-2">Lema de Campaña</th>
+                          <th className="p-2">Propuestas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {candidates.map(c => (
+                          <tr key={c.id} className="hover:bg-slate-50">
+                            <td className="p-2 font-mono text-purple-800 font-bold uppercase">{c.positionId}</td>
+                            <td className="p-2 font-mono font-bold text-center">{c.number}</td>
+                            <td className="p-2 font-medium">{c.fullName}</td>
+                            <td className="p-2 italic text-slate-600">{c.slogan || '—'}</td>
+                            <td className="p-2 text-slate-500">{c.proposals?.length || 0} propuestas</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+
+                  {activeInspectorTable === 'jurados' && (
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0">
+                        <tr>
+                          <th className="p-2">Mesa Asignada</th>
+                          <th className="p-2">Nombre Jurado</th>
+                          <th className="p-2">Rol Electoral</th>
+                          <th className="p-2">PIN Acceso</th>
+                          <th className="p-2">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {jurados.map(j => (
+                          <tr key={j.id} className="hover:bg-slate-50 font-mono">
+                            <td className="p-2 font-bold text-amber-800">Mesa {j.mesaNumber}</td>
+                            <td className="p-2 font-sans font-medium">{j.fullName}</td>
+                            <td className="p-2">{j.role}</td>
+                            <td className="p-2 text-slate-500">{j.pin}</td>
+                            <td className="p-2">
+                              <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                                {j.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+
+                  {activeInspectorTable === 'admins' && (
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0">
+                        <tr>
+                          <th className="p-2">Nombre Completo</th>
+                          <th className="p-2">Usuario</th>
+                          <th className="p-2">PIN Acceso</th>
+                          <th className="p-2">Rol Asignado</th>
+                          <th className="p-2">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {admins.map(a => (
+                          <tr key={a.id} className="hover:bg-slate-50 font-mono">
+                            <td className="p-2 font-sans font-medium">{a.fullName}</td>
+                            <td className="p-2 font-bold text-indigo-900">{a.username}</td>
+                            <td className="p-2 text-slate-500">{a.pin}</td>
+                            <td className="p-2 text-slate-700">{a.role}</td>
+                            <td className="p-2">
+                              <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                                {a.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Guide Step-by-Step for Google Sheets */}

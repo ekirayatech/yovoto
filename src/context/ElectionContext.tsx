@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
+  INITIAL_ADMINS,
   INITIAL_CANDIDATES,
   INITIAL_CONFIG,
+  INITIAL_JURADOS,
   INITIAL_POSITIONS,
   INITIAL_STUDENTS
 } from '../data/mockElectionData';
 import {
+  AdminMember,
   AppRole,
   AuditLog,
   Candidate,
@@ -13,12 +16,25 @@ import {
   ElectionConfig,
   ElectionStatus,
   EncryptedVote,
+  JuradoMember,
   Position,
   Student,
   VotingCertificate
 } from '../types/election';
 import { calculateBlockHash, generateFolioCode, sha256, simpleFastHash } from '../utils/crypto';
-import { writeVoteToSheets } from '../utils/googleSheetsService';
+import {
+  readAdminsFromSheets,
+  readAllFromSheets,
+  readCandidatesFromSheets,
+  readCensusFromSheets,
+  readJuradosFromSheets,
+  writeAdminsToSheets,
+  writeAllToSheets,
+  writeCandidatesToSheets,
+  writeJuradosToSheets,
+  writeVotersToSheets,
+  writeVoteToSheets
+} from '../utils/googleSheetsService';
 
 interface TerminalInfo {
   id: string;
@@ -32,6 +48,8 @@ interface ElectionContextType {
   positions: Position[];
   candidates: Candidate[];
   students: Student[];
+  jurados: JuradoMember[];
+  admins: AdminMember[];
   votes: EncryptedVote[];
   auditLogs: AuditLog[];
   currentRole: AppRole;
@@ -71,6 +89,14 @@ interface ElectionContextType {
   addCandidate: (newCandidate: Omit<Candidate, 'id'>) => void;
   updateCandidate: (updatedCandidate: Candidate) => void;
   deleteCandidate: (candidateId: string) => { success: boolean; error?: string };
+  addJurado: (newJurado: Omit<JuradoMember, 'id'>) => void;
+  updateJurado: (updatedJurado: JuradoMember) => void;
+  deleteJurado: (id: string) => void;
+  addAdmin: (newAdmin: Omit<AdminMember, 'id'>) => void;
+  updateAdmin: (updatedAdmin: AdminMember) => void;
+  deleteAdmin: (id: string) => void;
+  loadTableFromSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string; count?: number; data?: any }>;
+  syncTableToSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string }>;
   syncWithGoogleSheets: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
   sendCertificateByEmail: (email: string, cert: VotingCertificate) => Promise<{ success: boolean; message: string }>;
   resetElectionData: () => void;
@@ -83,6 +109,8 @@ const STORAGE_KEYS = {
   CONFIG: 'ekiraya_votoescolar_config_v1',
   STUDENTS: 'ekiraya_votoescolar_students_v1',
   CANDIDATES: 'ekiraya_votoescolar_candidates_v1',
+  JURADOS: 'ekiraya_votoescolar_jurados_v1',
+  ADMINS: 'ekiraya_votoescolar_admins_v1',
   POSITIONS: 'ekiraya_votoescolar_positions_v1',
   VOTES: 'ekiraya_votoescolar_votes_v1',
   LOGS: 'ekiraya_votoescolar_logs_v1'
@@ -209,6 +237,24 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return saved ? JSON.parse(saved) : INITIAL_STUDENTS;
     } catch {
       return INITIAL_STUDENTS;
+    }
+  });
+
+  const [jurados, setJurados] = useState<JuradoMember[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.JURADOS);
+      return saved ? JSON.parse(saved) : INITIAL_JURADOS;
+    } catch {
+      return INITIAL_JURADOS;
+    }
+  });
+
+  const [admins, setAdmins] = useState<AdminMember[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.ADMINS);
+      return saved ? JSON.parse(saved) : INITIAL_ADMINS;
+    } catch {
+      return INITIAL_ADMINS;
     }
   });
 
@@ -543,6 +589,22 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       console.error(e);
     }
   }, [candidates]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.JURADOS, JSON.stringify(jurados));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [jurados]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(admins));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [admins]);
 
   useEffect(() => {
     try {
@@ -882,7 +944,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Authentication handlers
   const loginAdmin = (password: string) => {
     const trimmed = password.trim();
-    if (trimmed === 'admin2026' || trimmed === 'ekiraya2026' || trimmed === 'admin') {
+    const matchesAdmin = admins.some(a => a.status === 'ACTIVO' && (a.pin === trimmed || a.username.toLowerCase() === trimmed.toLowerCase()));
+    if (trimmed === 'admin2026' || trimmed === 'ekiraya2026' || trimmed === 'admin' || matchesAdmin) {
       setIsAdminAuthenticated(true);
       try {
         localStorage.setItem('ekiraya_admin_auth', 'true');
@@ -904,15 +967,17 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const loginJurado = (mesaNumber: number, name: string, pin: string) => {
     const trimmedPin = pin.trim().toLowerCase();
-    const valid = trimmedPin === 'jurado2026' || trimmedPin === `mesa0${mesaNumber}` || trimmedPin === `mesa${mesaNumber}` || trimmedPin === '1234';
+    const matchedJurado = jurados.find(j => j.mesaNumber === mesaNumber && j.status === 'ACTIVO');
+    const matchesJuradoPin = matchedJurado ? matchedJurado.pin.toLowerCase() === trimmedPin : false;
+    const valid = trimmedPin === 'jurado2026' || trimmedPin === `mesa0${mesaNumber}` || trimmedPin === `mesa${mesaNumber}` || trimmedPin === '1234' || matchesJuradoPin;
     if (valid) {
       setIsJuradoAuthenticated(true);
       setJuradoMesa(mesaNumber);
-      setJuradoName(name);
+      setJuradoName(name || matchedJurado?.fullName || `Jurado Mesa 0${mesaNumber}`);
       try {
         localStorage.setItem('ekiraya_jurado_auth', 'true');
         localStorage.setItem('ekiraya_jurado_mesa', mesaNumber.toString());
-        localStorage.setItem('ekiraya_jurado_name', name);
+        localStorage.setItem('ekiraya_jurado_name', name || matchedJurado?.fullName || `Jurado Mesa 0${mesaNumber}`);
       } catch {}
       addAuditLog('APERTURA_MESA', 'JURADO', name, `Acreditación exitosa de jurado para Mesa 0${mesaNumber}. Formato E-11 instalado.`, mesaNumber);
       return { success: true };
@@ -927,6 +992,193 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       localStorage.removeItem('ekiraya_jurado_auth');
     } catch {}
     setCurrentRole('VOTANTE');
+  };
+
+  // Jurados & Admins Management
+  const addJurado = (newJurado: Omit<JuradoMember, 'id'>) => {
+    const obj: JuradoMember = { ...newJurado, id: `jur-${Date.now()}` };
+    setJurados(prev => [...prev, obj]);
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Jurado acreditado: ${obj.fullName} (Mesa 0${obj.mesaNumber})`);
+  };
+
+  const updateJurado = (updated: JuradoMember) => {
+    setJurados(prev => prev.map(j => j.id === updated.id ? updated : j));
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Datos de jurado actualizados: ${updated.fullName} (Mesa 0${updated.mesaNumber})`);
+  };
+
+  const deleteJurado = (id: string) => {
+    const target = jurados.find(j => j.id === id);
+    setJurados(prev => prev.filter(j => j.id !== id));
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Jurado retirado de acreditación: ${target?.fullName || id}`);
+  };
+
+  const addAdmin = (newAdmin: Omit<AdminMember, 'id'>) => {
+    const obj: AdminMember = { ...newAdmin, id: `adm-${Date.now()}` };
+    setAdmins(prev => [...prev, obj]);
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Nuevo administrador registrado: ${obj.fullName} (${obj.username})`);
+  };
+
+  const updateAdmin = (updated: AdminMember) => {
+    setAdmins(prev => prev.map(a => a.id === updated.id ? updated : a));
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Datos de administrador actualizados: ${updated.fullName}`);
+  };
+
+  const deleteAdmin = (id: string) => {
+    const target = admins.find(a => a.id === id);
+    setAdmins(prev => prev.filter(a => a.id !== id));
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Administrador revocado: ${target?.fullName || id}`);
+  };
+
+  // LECTURA (GET) DESDE LAS 4 BASES DE DATOS EN GOOGLE SHEETS
+  const loadTableFromSheets = async (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => {
+    const scriptUrl = config.googleSheets.scriptUrl;
+    if (!scriptUrl) {
+      return { success: false, message: 'URL del webhook de Google Sheets no configurada.' };
+    }
+
+    try {
+      if (table === 'voters') {
+        const res = await readCensusFromSheets(scriptUrl);
+        if (res.success && res.data) {
+          const rawStudents = res.data.students || (Array.isArray(res.data) ? res.data : []);
+          if (rawStudents.length > 0) {
+            const mappedStudents: Student[] = rawStudents.map((s: any, idx: number) => ({
+              id: s.id || `est-sheet-${idx + 1}`,
+              documentType: s.documentType || 'TI',
+              documentNumber: String(s.documentNumber),
+              fullName: s.fullName,
+              grade: s.grade,
+              group: s.group,
+              mesaNumber: Number(s.mesaNumber) || 1,
+              email: s.email || '',
+              hasVoted: Boolean(s.hasVoted),
+              votedAt: s.votedAt,
+              receiptFolio: s.receiptFolio,
+              isVerifiedByJurado: Boolean(s.hasVoted)
+            }));
+            setStudents(mappedStudents);
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Censo de ${mappedStudents.length} votantes cargado exitosamente desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${mappedStudents.length} votantes desde Sheets.`, count: mappedStudents.length, data: mappedStudents };
+          }
+        }
+        return res;
+      }
+
+      if (table === 'candidates') {
+        const res = await readCandidatesFromSheets(scriptUrl);
+        if (res.success && res.data) {
+          const rawCandidates = res.data.candidates || (Array.isArray(res.data) ? res.data : []);
+          if (rawCandidates.length > 0) {
+            setCandidates(rawCandidates);
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${rawCandidates.length} candidaturas cargadas exitosamente desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${rawCandidates.length} candidatos desde Sheets.`, count: rawCandidates.length, data: rawCandidates };
+          }
+        }
+        return res;
+      }
+
+      if (table === 'jurados') {
+        const res = await readJuradosFromSheets(scriptUrl);
+        if (res.success && res.data) {
+          const rawJurados = res.data.jurados || (Array.isArray(res.data) ? res.data : []);
+          if (rawJurados.length > 0) {
+            setJurados(rawJurados);
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${rawJurados.length} jurados acreditados cargados desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${rawJurados.length} jurados desde Sheets.`, count: rawJurados.length, data: rawJurados };
+          }
+        }
+        return res;
+      }
+
+      if (table === 'admins') {
+        const res = await readAdminsFromSheets(scriptUrl);
+        if (res.success && res.data) {
+          const rawAdmins = res.data.admins || (Array.isArray(res.data) ? res.data : []);
+          if (rawAdmins.length > 0) {
+            setAdmins(rawAdmins);
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${rawAdmins.length} administradores cargados desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${rawAdmins.length} administradores desde Sheets.`, count: rawAdmins.length, data: rawAdmins };
+          }
+        }
+        return res;
+      }
+
+      if (table === 'all') {
+        const res = await readAllFromSheets(scriptUrl);
+        if (res.success && res.data) {
+          if (res.data.students?.length) setStudents(res.data.students);
+          if (res.data.candidates?.length) setCandidates(res.data.candidates);
+          if (res.data.jurados?.length) setJurados(res.data.jurados);
+          if (res.data.admins?.length) setAdmins(res.data.admins);
+          addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', 'Sincronización completa de las 4 bases de datos leídas desde Google Sheets.');
+          return { success: true, message: 'Las 4 bases de datos fueron leídas y cargadas con éxito.', data: res.data };
+        }
+        return res;
+      }
+
+      return { success: false, message: 'Tabla desconocida' };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Error al leer tabla desde Google Sheets.' };
+    }
+  };
+
+  // ESCRITURA / REGISTRO (POST) HACIA LAS 4 BASES DE DATOS EN GOOGLE SHEETS
+  const syncTableToSheets = async (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => {
+    const scriptUrl = config.googleSheets.scriptUrl;
+    if (!scriptUrl) {
+      return { success: false, message: 'URL del webhook de Google Sheets no configurada.' };
+    }
+
+    try {
+      if (table === 'voters') {
+        const res = await writeVotersToSheets(scriptUrl, students);
+        if (res.success) {
+          addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Base de datos de ${students.length} votantes registrada en Google Sheets.`);
+        }
+        return res;
+      }
+
+      if (table === 'candidates') {
+        const res = await writeCandidatesToSheets(scriptUrl, candidates);
+        if (res.success) {
+          addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Base de datos de ${candidates.length} candidatos registrada en Google Sheets.`);
+        }
+        return res;
+      }
+
+      if (table === 'jurados') {
+        const res = await writeJuradosToSheets(scriptUrl, jurados);
+        if (res.success) {
+          addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Base de datos de ${jurados.length} jurados registrada en Google Sheets.`);
+        }
+        return res;
+      }
+
+      if (table === 'admins') {
+        const res = await writeAdminsToSheets(scriptUrl, admins);
+        if (res.success) {
+          addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Base de datos de ${admins.length} administradores registrada en Google Sheets.`);
+        }
+        return res;
+      }
+
+      if (table === 'all') {
+        const res = await writeAllToSheets(scriptUrl, {
+          students,
+          candidates,
+          jurados,
+          admins
+        });
+        if (res.success) {
+          addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', 'Sincronización integral de las 4 bases de datos registrada en Google Sheets.');
+        }
+        return res;
+      }
+
+      return { success: false, message: 'Tabla desconocida' };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Error al registrar tabla en Google Sheets.' };
+    }
   };
 
   // Google Sheets integration (Lectura y Escritura Real)
@@ -1046,6 +1298,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         positions,
         candidates,
         students,
+        jurados,
+        admins,
         votes,
         auditLogs,
         currentRole,
@@ -1072,6 +1326,14 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addCandidate,
         updateCandidate,
         deleteCandidate,
+        addJurado,
+        updateJurado,
+        deleteJurado,
+        addAdmin,
+        updateAdmin,
+        deleteAdmin,
+        loadTableFromSheets,
+        syncTableToSheets,
         isAdminAuthenticated,
         isJuradoAuthenticated,
         juradoName,

@@ -1,4 +1,12 @@
-import { Candidate, ElectionConfig, PollingStation, Position, Student } from '../types/election';
+import {
+  AdminMember,
+  Candidate,
+  ElectionConfig,
+  JuradoMember,
+  PollingStation,
+  Position,
+  Student
+} from '../types/election';
 
 export const ALL_GRADES = [
   'Pre-Jardín',
@@ -1255,3 +1263,75 @@ export const INITIAL_CONFIG: ElectionConfig = {
   },
   encryptionKeyFingerprint: 'SHA256:4a8b79f8e712a10b45920c8de15c32890fabc4231a'
 };
+
+export const INITIAL_JURADOS: JuradoMember[] = [
+  {
+    id: 'jur-01',
+    mesaNumber: 1,
+    fullName: 'Prof. Claudia Marcela Ríos',
+    documentNumber: '52890123',
+    role: 'PRESIDENTE_MESA',
+    pin: 'jurado2026',
+    email: 'claudia.rios@ekiraya.edu.co',
+    status: 'ACTIVO',
+    openedMesaAt: '2026-09-17T08:00:00.000Z'
+  },
+  {
+    id: 'jur-02',
+    mesaNumber: 2,
+    fullName: 'Lic. Fernando José Barreto',
+    documentNumber: '79450321',
+    role: 'PRESIDENTE_MESA',
+    pin: 'jurado2026',
+    email: 'fernando.barreto@ekiraya.edu.co',
+    status: 'ACTIVO',
+    openedMesaAt: '2026-09-17T08:05:00.000Z'
+  },
+  {
+    id: 'jur-03',
+    mesaNumber: 3,
+    fullName: 'Lic. Andrea Viviana Castro',
+    documentNumber: '1018432190',
+    role: 'PRESIDENTE_MESA',
+    pin: 'jurado2026',
+    email: 'andrea.castro@ekiraya.edu.co',
+    status: 'ACTIVO',
+    openedMesaAt: '2026-09-17T08:02:00.000Z'
+  }
+];
+
+export const INITIAL_ADMINS: AdminMember[] = [
+  {
+    id: 'adm-01',
+    fullName: 'Dra. Patricia Elena Montoya Gómez',
+    documentNumber: '41982301',
+    username: 'rectoria',
+    role: 'SUPER_ADMIN',
+    pin: 'admin2026',
+    email: 'rectoria@ekiraya.edu.co',
+    status: 'ACTIVO',
+    lastAccessAt: '2026-09-17T07:45:00.000Z'
+  },
+  {
+    id: 'adm-02',
+    fullName: 'Lic. Andrés Mauricio Galindo',
+    documentNumber: '80123456',
+    username: 'lider.ciencias',
+    role: 'REGISTRADOR',
+    pin: 'admin2026',
+    email: 'andres.galindo@ekiraya.edu.co',
+    status: 'ACTIVO',
+    lastAccessAt: '2026-09-17T07:50:00.000Z'
+  },
+  {
+    id: 'adm-03',
+    fullName: 'Ing. Mateo Bolaños',
+    documentNumber: '1020304050',
+    username: 'auditor.sistemas',
+    role: 'AUDITOR',
+    pin: 'admin2026',
+    email: 'mebolanos@cem.edu.co',
+    status: 'ACTIVO',
+    lastAccessAt: '2026-09-17T08:10:00.000Z'
+  }
+];

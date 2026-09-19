@@ -131,3 +131,27 @@ export interface ElectionConfig {
 }
 
 export type AppRole = 'VOTANTE' | 'JURADO' | 'ADMIN';
+
+export interface JuradoMember {
+  id: string;
+  mesaNumber: number;
+  fullName: string;
+  documentNumber: string;
+  role: 'PRESIDENTE_MESA' | 'VOCAL' | 'REMANENTE';
+  pin: string;
+  email?: string;
+  status: 'ACTIVO' | 'INACTIVO';
+  openedMesaAt?: string;
+}
+
+export interface AdminMember {
+  id: string;
+  fullName: string;
+  documentNumber: string;
+  username: string;
+  role: 'SUPER_ADMIN' | 'AUDITOR' | 'REGISTRADOR';
+  pin: string;
+  email?: string;
+  status: 'ACTIVO' | 'INACTIVO';
+  lastAccessAt?: string;
+}
