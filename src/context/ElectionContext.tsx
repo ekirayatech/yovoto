@@ -76,7 +76,7 @@ interface ElectionContextType {
   isAdminAuthenticated: boolean;
   isJuradoAuthenticated: boolean;
   juradoName: string;
-  loginAdmin: (password: string) => { success: boolean; error?: string };
+  loginAdmin: (password: string, usernameAttempt?: string) => { success: boolean; error?: string };
   logoutAdmin: () => void;
   loginJurado: (mesaNumber: number, juradoName: string, pin: string) => { success: boolean; error?: string };
   logoutJurado: () => void;
@@ -99,6 +99,7 @@ interface ElectionContextType {
   deleteAdmin: (id: string) => void;
   loadTableFromSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string; count?: number; data?: any }>;
   syncTableToSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string }>;
+  saveTableToSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string }>;
   syncWithGoogleSheets: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
   sendCertificateByEmail: (email: string, cert: VotingCertificate) => Promise<{ success: boolean; message: string }>;
   resetElectionData: () => void;
@@ -747,7 +748,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } else {
           // Intento 2: Recargar censo completo de Sheets (por si agregaron nuevos registros)
           console.log('[VoterAuth] getVoter no encontró registro directo. Recargando censo completo de Sheets...');
-          const censusRes = await loadTableFromSheets('voters');
+          const censusRes = await loadTableFromSheets('voters') as any;
           if (censusRes.success && censusRes.data && Array.isArray(censusRes.data)) {
             const reFound = (censusRes.data as Student[]).find(
               s => normalizeDocumentNumber(s.documentNumber) === rawClean
@@ -1062,19 +1063,50 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // Authentication handlers
-  const loginAdmin = (password: string) => {
+  const loginAdmin = (password: string, usernameAttempt?: string) => {
     const trimmed = password.trim();
-    const matchesAdmin = admins.some(a => a.status === 'ACTIVO' && (a.pin === trimmed || a.username.toLowerCase() === trimmed.toLowerCase()));
-    if (trimmed === 'admin2026' || trimmed === 'ekiraya2026' || trimmed === 'admin' || matchesAdmin) {
+    const trimmedUser = (usernameAttempt || '').trim().toLowerCase();
+
+    // Check master pins first
+    if (trimmed === 'admin2026' || trimmed === 'ekiraya2026' || trimmed === 'admin') {
       setIsAdminAuthenticated(true);
       try {
         localStorage.setItem('ekiraya_admin_auth', 'true');
       } catch {}
-      addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', 'Sesión de Administrador iniciada formalmente.');
+      addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', 'Sesión de Administrador iniciada formalmente (Clave Maestra).');
       return { success: true };
     }
-    addAuditLog('SEGURIDAD_ALERTA', 'ADMIN', 'Control de Acceso', 'Intento fallido de autenticación administrativa con clave incorrecta.');
-    return { success: false, error: 'Clave de administrador incorrecta. Use la clave oficial (admin2026).' };
+
+    // If username provided, match user and pin
+    if (trimmedUser) {
+      const matchedByUser = admins.find(a => 
+        a.status === 'ACTIVO' && 
+        (a.username.toLowerCase() === trimmedUser || a.fullName.toLowerCase() === trimmedUser || (a.email && a.email.toLowerCase() === trimmedUser)) &&
+        a.pin.trim().toLowerCase() === trimmed.toLowerCase()
+      );
+      if (matchedByUser) {
+        setIsAdminAuthenticated(true);
+        try {
+          localStorage.setItem('ekiraya_admin_auth', 'true');
+        } catch {}
+        addAuditLog('SISTEMA_INICIO', 'ADMIN', matchedByUser.fullName, `Sesión de Administrador iniciada por ${matchedByUser.fullName} (${matchedByUser.username}).`);
+        return { success: true };
+      }
+    }
+
+    // Match by PIN alone or username alone across active admins
+    const matchedByPin = admins.find(a => a.status === 'ACTIVO' && (a.pin.trim().toLowerCase() === trimmed.toLowerCase() || a.username.toLowerCase() === trimmed.toLowerCase()));
+    if (matchedByPin) {
+      setIsAdminAuthenticated(true);
+      try {
+        localStorage.setItem('ekiraya_admin_auth', 'true');
+      } catch {}
+      addAuditLog('SISTEMA_INICIO', 'ADMIN', matchedByPin.fullName, `Sesión de Administrador iniciada por credencial: ${matchedByPin.fullName}.`);
+      return { success: true };
+    }
+
+    addAuditLog('SEGURIDAD_ALERTA', 'ADMIN', 'Control de Acceso', 'Intento fallido de autenticación administrativa con clave o usuario erróneo.');
+    return { success: false, error: 'Clave o usuario de administrador incorrecto. Use su PIN registrado o la clave oficial (admin2026).' };
   };
 
   const logoutAdmin = () => {
@@ -1149,6 +1181,256 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Administrador revocado: ${target?.fullName || id}`);
   };
 
+  // Robust Normalization for Sheets without headers or varying column orders
+  const normalizeRawAdmins = (rawItems: any[]): AdminMember[] => {
+    return rawItems.map((item, idx) => {
+      if (Array.isArray(item)) {
+        const textCells = item
+          .map((val, c) => ({ col: c, val: String(val !== null && val !== undefined ? val : '').trim() }))
+          .filter(tc => tc.val !== '');
+        let fullName = '';
+        let username = '';
+        let pin = '';
+        let role: AdminMember['role'] = 'SUPER_ADMIN';
+        let status: AdminMember['status'] = 'ACTIVO';
+        let email = '';
+        let doc = '';
+
+        for (const tc of textCells) {
+          const v = tc.val;
+          const vl = v.toLowerCase();
+          if (v.includes('@') && !email) {
+            email = v;
+            if (!username) username = v;
+          } else if (['super_admin', 'admin', 'auditor', 'registrador', 'supervisor'].includes(vl)) {
+            role = vl.includes('audit') ? 'AUDITOR' : (vl.includes('regist') ? 'REGISTRADOR' : 'SUPER_ADMIN');
+          } else if (['activo', 'inactivo', 'active', 'inactive'].includes(vl)) {
+            status = vl.includes('inact') ? 'INACTIVO' : 'ACTIVO';
+          }
+        }
+
+        const remaining = textCells.filter(tc => {
+          const vl = tc.val.toLowerCase();
+          return !vl.includes('admin') && !vl.includes('audit') && !vl.includes('regist') && !vl.includes('activ') && !vl.includes('@');
+        });
+
+        if (remaining.length === 1) {
+          fullName = remaining[0].val;
+          username = remaining[0].val.toLowerCase().replace(/\s+/g, '.');
+          pin = 'admin2026';
+        } else if (remaining.length === 2) {
+          fullName = remaining[0].val;
+          pin = remaining[1].val;
+          username = fullName.toLowerCase().replace(/\s+/g, '.');
+        } else if (remaining.length >= 3) {
+          if (/^\d+$/.test(remaining[0].val) && remaining[0].val.length <= 4) {
+            fullName = remaining[1].val;
+            username = remaining[2].val;
+            pin = remaining[3]?.val || 'admin2026';
+          } else {
+            fullName = remaining[0].val;
+            username = remaining[1].val;
+            pin = remaining[2].val;
+          }
+        }
+
+        return {
+          id: `adm-sheet-${idx + 1}`,
+          fullName: fullName || username || `Administrador ${idx + 1}`,
+          username: (username || fullName || `admin${idx + 1}`).toLowerCase(),
+          documentNumber: doc,
+          pin: pin || 'admin2026',
+          role,
+          status,
+          email
+        };
+      }
+
+      const id = item.id || `adm-sheet-${idx + 1}`;
+      const fullName = item.fullName || item.nombre || item.Nombre || item.nombreCompleto || item.name || item.Name || '';
+      const username = (item.username || item.usuario || item.Usuario || item.user || item.User || fullName || `admin${idx + 1}`).toLowerCase().trim();
+      const pin = String(item.pin ?? item.clave ?? item.Clave ?? item.password ?? item.Password ?? 'admin2026').trim();
+      const rawRole = String(item.role || item.rol || item.Rol || item.cargo || 'SUPER_ADMIN').toUpperCase();
+      const role: AdminMember['role'] = rawRole.includes('AUDIT') ? 'AUDITOR' : (rawRole.includes('REGIST') ? 'REGISTRADOR' : 'SUPER_ADMIN');
+      const rawStatus = String(item.status || item.estado || item.Estado || 'ACTIVO').toUpperCase();
+      const status: AdminMember['status'] = rawStatus.includes('INACT') ? 'INACTIVO' : 'ACTIVO';
+      const email = item.email || item.correo || item.Correo || '';
+      const documentNumber = String(item.documentNumber || item.documento || item.cedula || '');
+
+      return {
+        id,
+        fullName: fullName || username || `Administrador ${idx + 1}`,
+        username: username || 'admin',
+        pin: pin || 'admin2026',
+        role,
+        status,
+        email,
+        documentNumber
+      };
+    });
+  };
+
+  const normalizeRawJurados = (rawItems: any[]): JuradoMember[] => {
+    return rawItems.map((item, idx) => {
+      if (Array.isArray(item)) {
+        const textCells = item
+          .map((val, c) => ({ col: c, val: String(val !== null && val !== undefined ? val : '').trim() }))
+          .filter(tc => tc.val !== '');
+        let mesaNumber = 1;
+        let fullName = '';
+        let role: JuradoMember['role'] = 'PRESIDENTE_MESA';
+        let pin = '';
+        let status: JuradoMember['status'] = 'ACTIVO';
+        let email = '';
+        let doc = '';
+
+        for (const tc of textCells) {
+          const v = tc.val;
+          const vl = v.toLowerCase();
+          const mMatch = v.match(/mesa\s*0*(\d+)/i) || (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 50 ? [v, v] : null);
+          if (mMatch && mesaNumber === 1) {
+            mesaNumber = Number(mMatch[1]);
+          } else if (vl.includes('presid')) {
+            role = 'PRESIDENTE_MESA';
+          } else if (vl.includes('vocal')) {
+            role = 'VOCAL';
+          } else if (vl.includes('reman') || vl.includes('suplen')) {
+            role = 'REMANENTE';
+          } else if (vl.includes('inact')) {
+            status = 'INACTIVO';
+          } else if (v.includes('@')) {
+            email = v;
+          } else if (v.length >= 2 && !fullName) {
+            fullName = v;
+          } else if (v.length >= 2 && !pin) {
+            pin = v;
+          }
+        }
+
+        return {
+          id: `jur-sheet-${idx + 1}`,
+          mesaNumber,
+          fullName: fullName || `Jurado Mesa 0${mesaNumber}`,
+          documentNumber: doc,
+          role,
+          pin: pin || 'jurado2026',
+          email,
+          status
+        };
+      }
+
+      const mesaNumber = Number(String(item.mesaNumber || item.mesa || item.Mesa || item.puesto || 1).replace(/\D/g, '')) || 1;
+      const fullName = item.fullName || item.nombre || item.Nombre || item.nombreCompleto || item.jurado || `Jurado Mesa 0${mesaNumber}`;
+      const rawRole = String(item.role || item.rol || item.Rol || item.cargo || 'PRESIDENTE_MESA').toUpperCase();
+      const role: JuradoMember['role'] = rawRole.includes('VOCAL') ? 'VOCAL' : (rawRole.includes('REMAN') || rawRole.includes('SUPLEN') ? 'REMANENTE' : 'PRESIDENTE_MESA');
+      const pin = String(item.pin ?? item.clave ?? item.Clave ?? 'jurado2026').trim();
+      const rawStatus = String(item.status || item.estado || item.Estado || 'ACTIVO').toUpperCase();
+      const status: JuradoMember['status'] = rawStatus.includes('INACT') ? 'INACTIVO' : 'ACTIVO';
+      const email = item.email || item.correo || '';
+      const documentNumber = String(item.documentNumber || item.documento || item.cedula || '');
+
+      return {
+        id: item.id || `jur-sheet-${idx + 1}`,
+        mesaNumber,
+        fullName,
+        documentNumber,
+        role,
+        pin: pin || 'jurado2026',
+        email,
+        status
+      };
+    });
+  };
+
+  const normalizeRawCandidates = (rawItems: any[]): Candidate[] => {
+    return rawItems.map((item, idx) => {
+      if (Array.isArray(item)) {
+        const textCells = item
+          .map((val, c) => ({ col: c, val: String(val !== null && val !== undefined ? val : '').trim() }))
+          .filter(tc => tc.val !== '');
+        let posId = 'personero';
+        let fullName = '';
+        let numberStr = '';
+        let grade = '11°';
+        let group = '11-A';
+        let slogan = '';
+        let colorHex = '#7e22ce';
+        let photoUrl = '';
+        let proposals: string[] = [];
+        let isBlankVote = false;
+
+        for (const tc of textCells) {
+          const v = tc.val;
+          const vl = v.toLowerCase();
+          if (vl.includes('personer')) posId = 'personero';
+          else if (vl.includes('contralor')) posId = 'contralor';
+          else if (vl.includes('cabild')) posId = 'cabildante';
+          else if (vl.includes('consejo')) posId = 'consejo';
+          else if (vl.includes('representante')) posId = 'representante';
+          else if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) colorHex = v;
+          else if (/^https?:\/\//i.test(v)) photoUrl = v;
+          else if (/^0*(\d{1,2})$/.test(v) && !numberStr) numberStr = v;
+          else if (/^(1[0-2]|[0-9])°?(-?[a-zA-Z])?$/.test(v) && grade === '11°') grade = v;
+          else if (vl.includes('blanco')) isBlankVote = true;
+          else if (v.includes(';') && proposals.length === 0) proposals = v.split(';').map(p => p.trim()).filter(Boolean);
+          else if (!fullName && v.length >= 3 && !/^\d+$/.test(v)) fullName = v;
+          else if (!slogan && v.length >= 3) slogan = v;
+        }
+
+        if (!fullName) fullName = `Candidato #${numberStr || idx + 1}`;
+        if (!numberStr) numberStr = String(idx + 1).padStart(2, '0');
+        if (fullName.toLowerCase().includes('blanco')) isBlankVote = true;
+
+        return {
+          id: `cand-sheet-${idx + 1}`,
+          positionId: posId,
+          number: numberStr.padStart(2, '0'),
+          fullName,
+          grade,
+          group,
+          slogan: slogan || 'Liderazgo, compromiso y transparencia',
+          proposals: proposals.length > 0 ? proposals : ['Representación estudiantil activa', 'Espacios de diálogo', 'Proyectos pedagógicos'],
+          colorHex: isBlankVote ? '#64748b' : colorHex,
+          photoUrl: photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces',
+          isBlankVote
+        };
+      }
+
+      const id = item.id || `cand-sheet-${idx + 1}`;
+      let posId = String(item.positionId || item.cargo || item.Cargo || item.posicion || 'personero').toLowerCase();
+      if (posId.includes('contralor')) posId = 'contralor';
+      else if (posId.includes('cabild')) posId = 'cabildante';
+      else if (posId.includes('consejo')) posId = 'consejo';
+      else posId = 'personero';
+
+      const rawNum = item.number !== undefined ? item.number : (item.numero || item.tarjeton || idx + 1);
+      const number = String(rawNum).padStart(2, '0');
+      const fullName = item.fullName || item.nombre || item.Nombre || item.nombreCompleto || item.candidato || `Candidato #${number}`;
+      const grade = item.grade || item.grado || item.Grado || '11°';
+      const group = item.group || item.grupo || item.Grupo || '11-A';
+      const slogan = item.slogan || item.lema || item.Lema || 'Liderazgo, compromiso y transparencia';
+      const colorHex = item.colorHex || item.color || item.Color || '#7e22ce';
+      const photoUrl = item.photoUrl || item.foto || item.Foto || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces';
+      const rawProps = item.proposals || item.propuestas || item.Propuestas || [];
+      const proposals = Array.isArray(rawProps) ? rawProps : (typeof rawProps === 'string' ? rawProps.split(';').map(p => p.trim()).filter(Boolean) : []);
+      const isBlankVote = Boolean(item.isBlankVote || item.votoEnBlanco || item.blanco || fullName.toLowerCase().includes('blanco'));
+
+      return {
+        id,
+        positionId: posId,
+        number,
+        fullName,
+        grade,
+        group,
+        slogan,
+        proposals: proposals.length > 0 ? proposals : ['Representación estudiantil activa', 'Espacios de diálogo', 'Proyectos pedagógicos'],
+        colorHex: isBlankVote ? '#64748b' : colorHex,
+        photoUrl,
+        isBlankVote
+      };
+    });
+  };
+
   // LECTURA (GET) DESDE LAS 4 BASES DE DATOS EN GOOGLE SHEETS
   const loadTableFromSheets = async (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => {
     const scriptUrl = config.googleSheets.scriptUrl;
@@ -1194,9 +1476,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (res.success && res.data) {
           const rawCandidates = res.data.candidates || (Array.isArray(res.data) ? res.data : []);
           if (rawCandidates.length > 0) {
-            setCandidates(rawCandidates);
-            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${rawCandidates.length} candidaturas cargadas exitosamente desde Google Sheets.`);
-            return { success: true, message: `Se cargaron ${rawCandidates.length} candidatos desde Sheets.`, count: rawCandidates.length, data: rawCandidates };
+            const normalized = normalizeRawCandidates(rawCandidates);
+            setCandidates(normalized);
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${normalized.length} candidaturas cargadas exitosamente desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${normalized.length} candidatos desde Sheets.`, count: normalized.length, data: normalized };
           }
         }
         return res;
@@ -1207,9 +1490,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (res.success && res.data) {
           const rawJurados = res.data.jurados || (Array.isArray(res.data) ? res.data : []);
           if (rawJurados.length > 0) {
-            setJurados(rawJurados);
-            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${rawJurados.length} jurados acreditados cargados desde Google Sheets.`);
-            return { success: true, message: `Se cargaron ${rawJurados.length} jurados desde Sheets.`, count: rawJurados.length, data: rawJurados };
+            const normalized = normalizeRawJurados(rawJurados);
+            setJurados(normalized);
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${normalized.length} jurados acreditados cargados desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${normalized.length} jurados desde Sheets.`, count: normalized.length, data: normalized };
           }
         }
         return res;
@@ -1220,9 +1504,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (res.success && res.data) {
           const rawAdmins = res.data.admins || (Array.isArray(res.data) ? res.data : []);
           if (rawAdmins.length > 0) {
-            setAdmins(rawAdmins);
-            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${rawAdmins.length} administradores cargados desde Google Sheets.`);
-            return { success: true, message: `Se cargaron ${rawAdmins.length} administradores desde Sheets.`, count: rawAdmins.length, data: rawAdmins };
+            const normalized = normalizeRawAdmins(rawAdmins);
+            setAdmins(normalized);
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${normalized.length} administradores cargados desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${normalized.length} administradores desde Sheets.`, count: normalized.length, data: normalized };
           }
         }
         return res;
@@ -1232,17 +1517,17 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const res = await readAllFromSheets(scriptUrl);
         if (res.success && res.data) {
           if (res.data.students?.length) setStudents(res.data.students);
-          if (res.data.candidates?.length) setCandidates(res.data.candidates);
-          if (res.data.jurados?.length) setJurados(res.data.jurados);
-          if (res.data.admins?.length) setAdmins(res.data.admins);
+          if (res.data.candidates?.length) setCandidates(normalizeRawCandidates(res.data.candidates));
+          if (res.data.jurados?.length) setJurados(normalizeRawJurados(res.data.jurados));
+          if (res.data.admins?.length) setAdmins(normalizeRawAdmins(res.data.admins));
           fetch('/api/election/sync-all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               students: res.data.students || [],
-              candidates: res.data.candidates || [],
-              jurados: res.data.jurados || [],
-              admins: res.data.admins || []
+              candidates: res.data.candidates ? normalizeRawCandidates(res.data.candidates) : [],
+              jurados: res.data.jurados ? normalizeRawJurados(res.data.jurados) : [],
+              admins: res.data.admins ? normalizeRawAdmins(res.data.admins) : []
             })
           }).catch(() => {});
           addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', 'Sincronización completa de las 4 bases de datos leídas desde Google Sheets.');
@@ -1469,6 +1754,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         deleteAdmin,
         loadTableFromSheets,
         syncTableToSheets,
+        saveTableToSheets: syncTableToSheets,
         isAdminAuthenticated,
         isJuradoAuthenticated,
         juradoName,

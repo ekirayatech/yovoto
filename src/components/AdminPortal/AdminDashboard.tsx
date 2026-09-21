@@ -7,6 +7,7 @@ import {
   FileCheck2,
   FileSpreadsheet,
   FileText,
+  KeyRound,
   Lock,
   PauseCircle,
   PlayCircle,
@@ -15,19 +16,22 @@ import {
   Scale,
   Settings,
   ShieldCheck,
+  UserCheck,
   Users
 } from 'lucide-react';
 import React, { useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
 import { ElectionStatus } from '../../types/election';
+import { AdminsManagerTab } from './AdminsManagerTab';
 import { AuditLogsTab } from './AuditLogsTab';
 import { CandidateManagerTab } from './CandidateManagerTab';
 import { CensusManagerTab } from './CensusManagerTab';
 import { IntegrationsTab } from './IntegrationsTab';
+import { JuradosManagerTab } from './JuradosManagerTab';
 import { LiveResultsTab } from './LiveResultsTab';
 import { OfficialActasTab } from './OfficialActasTab';
 
-type AdminTab = 'results' | 'actas' | 'census' | 'candidates' | 'audit' | 'integrations';
+type AdminTab = 'results' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'integrations';
 
 export const AdminDashboard: React.FC = () => {
   const { config, updateElectionStatus, resetElectionData, students, votes } = useElection();
@@ -131,6 +135,8 @@ export const AdminDashboard: React.FC = () => {
             { id: 'actas', label: 'Actas Oficiales (E-14 / E-24)', icon: FileText },
             { id: 'census', label: 'Censo Estudiantil', icon: Users },
             { id: 'candidates', label: 'Candidatos & Tarjetón', icon: Award },
+            { id: 'jurados', label: 'Jurados & Mesas', icon: UserCheck },
+            { id: 'admins', label: 'Administradores', icon: KeyRound },
             { id: 'audit', label: 'Auditoría & Logs Cripto', icon: ShieldCheck },
             { id: 'integrations', label: 'Sheets & Supabase', icon: FileSpreadsheet }
           ].map(tab => {
@@ -161,6 +167,8 @@ export const AdminDashboard: React.FC = () => {
       {currentTab === 'actas' && <OfficialActasTab />}
       {currentTab === 'census' && <CensusManagerTab />}
       {currentTab === 'candidates' && <CandidateManagerTab />}
+      {currentTab === 'jurados' && <JuradosManagerTab />}
+      {currentTab === 'admins' && <AdminsManagerTab />}
       {currentTab === 'audit' && <AuditLogsTab />}
       {currentTab === 'integrations' && <IntegrationsTab />}
     </div>

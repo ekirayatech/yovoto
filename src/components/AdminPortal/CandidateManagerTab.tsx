@@ -2,11 +2,19 @@ import {
   AlertCircle,
   AlertTriangle,
   Check,
+  Download,
   Edit3,
+  FileSpreadsheet,
   Info,
+  LayoutGrid,
+  List,
   Pencil,
   Plus,
+  RefreshCw,
+  Search,
+  Sparkles,
   Trash2,
+  Upload,
   UserCheck,
   UserPlus,
   Users,
@@ -17,8 +25,21 @@ import { useElection } from '../../context/ElectionContext';
 import { Candidate } from '../../types/election';
 
 export const CandidateManagerTab: React.FC = () => {
-  const { positions, candidates, addCandidate, updateCandidate, deleteCandidate } = useElection();
-  const [selectedPosId, setSelectedPosId] = useState<string>(positions[0]?.id || 'personeria');
+  const {
+    positions,
+    candidates,
+    addCandidate,
+    updateCandidate,
+    deleteCandidate,
+    loadTableFromSheets,
+    syncTableToSheets
+  } = useElection();
+
+  const [selectedPosId, setSelectedPosId] = useState<string>('all');
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null);
   const [candidateToDelete, setCandidateToDelete] = useState<Candidate | null>(null);
@@ -26,6 +47,7 @@ export const CandidateManagerTab: React.FC = () => {
 
   // New Candidate Form State
   const [candNumber, setCandNumber] = useState<string>('03');
+  const [newCandPosId, setNewCandPosId] = useState<string>(positions[0]?.id || 'personeria');
   const [fullName, setFullName] = useState<string>('');
   const [grade, setGrade] = useState<string>('11°');
   const [group, setGroup] = useState<string>('11-C');
@@ -37,6 +59,7 @@ export const CandidateManagerTab: React.FC = () => {
   // Edit Candidate Form State
   const [editNumber, setEditNumber] = useState<string>('');
   const [editFullName, setEditFullName] = useState<string>('');
+  const [editPositionId, setEditPositionId] = useState<string>('personeria');
   const [editGrade, setEditGrade] = useState<string>('11°');
   const [editGroup, setEditGroup] = useState<string>('11-A');
   const [editPhotoUrl, setEditPhotoUrl] = useState<string>('');
@@ -44,12 +67,53 @@ export const CandidateManagerTab: React.FC = () => {
   const [editProposalsText, setEditProposalsText] = useState<string>('');
   const [editColorHex, setEditColorHex] = useState<string>('#7e22ce');
 
-  const currentPos = positions.find(p => p.id === selectedPosId) || positions[0];
-  const posCandidates = candidates.filter(c => c.positionId === currentPos.id);
+  const filteredCandidates = candidates.filter(cand => {
+    const matchesPos = selectedPosId === 'all' || cand.positionId === selectedPosId;
+    const matchesSearch =
+      !searchTerm.trim() ||
+      cand.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      cand.number.includes(searchTerm) ||
+      (cand.slogan || '').toLowerCase().includes(searchTerm.toLowerCase());
+    return matchesPos && matchesSearch;
+  });
 
   const showNotification = (type: 'success' | 'error', text: string) => {
     setNotificationMsg({ type, text });
-    setTimeout(() => setNotificationMsg(null), 4000);
+    setTimeout(() => setNotificationMsg(null), 4500);
+  };
+
+  const handleSyncFromSheets = async () => {
+    setIsSyncing(true);
+    showNotification('success', 'Importando candidatos desde Google Sheets (con o sin encabezados)...');
+    try {
+      const res = await loadTableFromSheets('candidates');
+      if (res.success) {
+        showNotification('success', res.message || 'Candidatos sincronizados con éxito desde Google Sheets.');
+      } else {
+        showNotification('error', res.message || 'No se pudieron importar los candidatos.');
+      }
+    } catch {
+      showNotification('error', 'Error al consultar Google Sheets.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSyncToSheets = async () => {
+    setIsSyncing(true);
+    showNotification('success', 'Guardando candidatos en Google Sheets...');
+    try {
+      const res = await syncTableToSheets('candidates');
+      if (res.success) {
+        showNotification('success', res.message || 'Candidatos guardados exitosamente en Google Sheets.');
+      } else {
+        showNotification('error', res.message || 'Error al guardar candidatos en Google Sheets.');
+      }
+    } catch {
+      showNotification('error', 'Error de conexión con Google Sheets.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
@@ -63,7 +127,7 @@ export const CandidateManagerTab: React.FC = () => {
 
     addCandidate({
       number: candNumber.trim(),
-      positionId: selectedPosId,
+      positionId: newCandPosId || (selectedPosId !== 'all' ? selectedPosId : positions[0]?.id || 'personeria'),
       fullName: fullName.trim(),
       grade,
       group,
@@ -83,6 +147,7 @@ export const CandidateManagerTab: React.FC = () => {
   const startEditCandidate = (cand: Candidate) => {
     setEditingCandidate(cand);
     setEditNumber(cand.number);
+    setEditPositionId(cand.positionId);
     setEditFullName(cand.fullName);
     setEditGrade(cand.grade || '11°');
     setEditGroup(cand.group || '11-A');
@@ -104,6 +169,7 @@ export const CandidateManagerTab: React.FC = () => {
     const updated: Candidate = {
       ...editingCandidate,
       number: editNumber.trim(),
+      positionId: editPositionId,
       fullName: editFullName.trim(),
       grade: editGrade,
       group: editGroup,
@@ -129,26 +195,74 @@ export const CandidateManagerTab: React.FC = () => {
     setCandidateToDelete(null);
   };
 
+  const getPositionTitle = (posId: string) => {
+    return positions.find(p => p.id === posId)?.title || posId;
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         <div>
-          <h3 className="text-lg font-black text-slate-900">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+              Elecciones 2026
+            </span>
+            <span className="text-xs text-slate-500 font-medium">Art. 28 Dec. 1860/94</span>
+          </div>
+          <h3 className="text-lg sm:text-xl font-black text-slate-900 mt-1">
             Candidaturas y Configuración del Tarjetón
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            Gestión oficial de candidatos conforme al Art. 28 del Decreto 1860 de 1994 y Ley 2195 de 2022.
+            Gestión completa de candidatos con edición, eliminación y sincronización con Google Sheets.
           </p>
         </div>
 
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Inscribir Nuevo Candidato</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
+          <button
+            onClick={handleSyncFromSheets}
+            disabled={isSyncing}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors cursor-pointer"
+            title="Importar candidatos desde la hoja de Google Sheets"
+          >
+            <Download className={`w-3.5 h-3.5 text-emerald-600 ${isSyncing ? 'animate-bounce' : ''}`} />
+            <span>Cargar desde Sheets</span>
+          </button>
+
+          <button
+            onClick={handleSyncToSheets}
+            disabled={isSyncing}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors cursor-pointer"
+            title="Guardar lista de candidatos actual en Google Sheets"
+          >
+            <Upload className="w-3.5 h-3.5 text-purple-600" />
+            <span>Guardar en Sheets</span>
+          </button>
+
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer ml-auto lg:ml-0"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Inscribir Nuevo Candidato</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Info Callout for Edit / Delete */}
+      <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border border-purple-200/80 rounded-2xl p-4 flex items-start gap-3 shadow-xs">
+        <div className="p-2 rounded-xl bg-purple-600 text-white shrink-0 mt-0.5 shadow-xs">
+          <Sparkles className="w-4 h-4" />
+        </div>
+        <div className="text-xs text-slate-700 space-y-1">
+          <p className="font-bold text-slate-900">
+            ¿Dónde editar o eliminar candidatos?
+          </p>
+          <p className="leading-relaxed text-slate-600">
+            Cada candidato dispone de botones directos de <strong className="text-purple-800">Editar (✏️)</strong> y <strong className="text-red-700">Eliminar (🗑️)</strong> en la esquina y base de su tarjeta, así como en la columna de acciones de la <strong>Vista Tabla</strong>.
+            Puede usar los botones de arriba para cargar o respaldar automáticamente en su Google Sheets (con o sin encabezados).
+          </p>
+        </div>
       </div>
 
       {/* Notification Banner */}
@@ -161,134 +275,313 @@ export const CandidateManagerTab: React.FC = () => {
           }`}
         >
           {notificationMsg.type === 'success' ? (
-            <Check className="w-4 h-4 text-emerald-600" />
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
           ) : (
-            <AlertCircle className="w-4 h-4 text-red-600" />
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
           )}
           <span>{notificationMsg.text}</span>
         </div>
       )}
 
-      {/* Position selector tabs */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        {positions.map(pos => (
+      {/* Filters and View Mode Controls */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+        {/* Position tabs including "Todos los Cargos" */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
           <button
-            key={pos.id}
-            onClick={() => setSelectedPosId(pos.id)}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
-              selectedPosId === pos.id
+            onClick={() => setSelectedPosId('all')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+              selectedPosId === 'all'
                 ? 'bg-purple-700 text-white shadow-xs'
-                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
-            {pos.shortTitle}
+            Todos los Cargos ({candidates.length})
           </button>
-        ))}
+
+          {positions.map(pos => {
+            const count = candidates.filter(c => c.positionId === pos.id).length;
+            return (
+              <button
+                key={pos.id}
+                onClick={() => setSelectedPosId(pos.id)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                  selectedPosId === pos.id
+                    ? 'bg-purple-700 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {pos.shortTitle} ({count})
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Search & View Mode Toggle */}
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 md:w-56">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              placeholder="Buscar candidato..."
+              className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-purple-600 outline-hidden"
+            />
+          </div>
+
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                viewMode === 'grid'
+                  ? 'bg-white text-purple-700 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+              title="Vista en Tarjetas"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className={`p-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                viewMode === 'table'
+                  ? 'bg-white text-purple-700 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+              title="Vista en Tabla Administrativa"
+            >
+              <List className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* Candidate Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {posCandidates.map(cand => (
-          <div
-            key={cand.id}
-            className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col justify-between"
-          >
+      {/* Grid Mode */}
+      {viewMode === 'grid' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredCandidates.map(cand => (
             <div
-              className="h-2 w-full"
-              style={{ backgroundColor: cand.isBlankVote ? '#64748b' : cand.colorHex }}
-            />
+              key={cand.id}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col justify-between hover:border-purple-300 transition-all group"
+            >
+              <div
+                className="h-2 w-full"
+                style={{ backgroundColor: cand.isBlankVote ? '#64748b' : cand.colorHex }}
+              />
 
-            <div className="p-5 flex-1 flex flex-col justify-between">
-              <div>
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg border"
-                    style={{
-                      backgroundColor: cand.isBlankVote ? '#f1f5f9' : `${cand.colorHex}20`,
-                      color: cand.isBlankVote ? '#475569' : cand.colorHex,
-                      borderColor: cand.isBlankVote ? '#cbd5e1' : `${cand.colorHex}40`
-                    }}
-                  >
-                    {cand.number}
-                  </div>
-
-                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                    {cand.isBlankVote ? 'Voto en Blanco' : `Tarjetón #${cand.number}`}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-3 mb-3">
-                  {!cand.isBlankVote && (
-                    <img
-                      src={cand.photoUrl}
-                      alt={cand.fullName}
-                      className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
-                    />
-                  )}
-                  <div>
-                    <h4 className="text-base font-black text-slate-900 leading-tight">
-                      {cand.fullName}
-                    </h4>
-                    <p className="text-xs font-semibold text-purple-700 mt-0.5">
-                      {!cand.isBlankVote ? `Grado ${cand.grade} • Grupo ${cand.group}` : 'Opción Constitucional'}
-                    </p>
-                  </div>
-                </div>
-
-                <p className="text-xs text-slate-600 italic bg-slate-50 p-2.5 rounded-xl border border-slate-100 mb-3">
-                  "{cand.slogan}"
-                </p>
-
-                {cand.proposals.length > 0 && (
-                  <div className="space-y-1.5 pt-2 border-t border-slate-100 mb-4">
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                      Propuestas Clave:
-                    </span>
-                    {cand.proposals.map((prop, idx) => (
-                      <div key={idx} className="flex items-start gap-2 text-xs text-slate-600">
-                        <span className="w-1.5 h-1.5 rounded-full bg-purple-600 mt-1.5 shrink-0" />
-                        <span className="text-[11px] leading-relaxed">{prop}</span>
+              <div className="p-5 flex-1 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-11 h-11 rounded-xl flex items-center justify-center font-black text-lg border shadow-xs"
+                        style={{
+                          backgroundColor: cand.isBlankVote ? '#f1f5f9' : `${cand.colorHex}15`,
+                          color: cand.isBlankVote ? '#475569' : cand.colorHex,
+                          borderColor: cand.isBlankVote ? '#cbd5e1' : `${cand.colorHex}40`
+                        }}
+                      >
+                        {cand.number}
                       </div>
-                    ))}
+                      <div>
+                        <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 block w-fit">
+                          {getPositionTitle(cand.positionId)}
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-500">
+                          {cand.isBlankVote ? 'Voto en Blanco' : `Tarjetón #${cand.number}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => startEditCandidate(cand)}
+                        className="p-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg border border-purple-200 transition-colors cursor-pointer"
+                        title="Editar candidato"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      {!cand.isBlankVote && (
+                        <button
+                          type="button"
+                          onClick={() => setCandidateToDelete(cand)}
+                          className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg border border-red-200 transition-colors cursor-pointer"
+                          title="Eliminar candidato"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
 
-              {/* Card Management Action Buttons */}
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 mt-auto">
-                <button
-                  type="button"
-                  onClick={() => startEditCandidate(cand)}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl text-xs font-bold bg-slate-100 hover:bg-purple-50 text-slate-700 hover:text-purple-700 border border-slate-200 transition-colors cursor-pointer"
-                  title="Editar datos de candidatura"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                  <span>Editar</span>
-                </button>
+                  <div className="flex items-center gap-3 mb-3">
+                    {!cand.isBlankVote && (
+                      <img
+                        src={cand.photoUrl}
+                        alt={cand.fullName}
+                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
+                      />
+                    )}
+                    <div className="min-w-0">
+                      <h4 className="text-base font-black text-slate-900 leading-tight truncate">
+                        {cand.fullName}
+                      </h4>
+                      <p className="text-xs font-semibold text-purple-700 mt-0.5">
+                        {!cand.isBlankVote ? `Grado ${cand.grade} • Grupo ${cand.group}` : 'Opción Constitucional'}
+                      </p>
+                    </div>
+                  </div>
 
-                {cand.isBlankVote ? (
-                  <span
-                    className="flex-1 text-center py-1.5 px-2 text-[10px] font-bold text-slate-400 bg-slate-50 rounded-xl border border-slate-100"
-                    title="El voto en blanco es una opción obligatoria por ley"
-                  >
-                    Obligatorio Ley
-                  </span>
-                ) : (
+                  <p className="text-xs text-slate-600 italic bg-slate-50 p-2.5 rounded-xl border border-slate-100 mb-3">
+                    "{cand.slogan}"
+                  </p>
+
+                  {cand.proposals.length > 0 && (
+                    <div className="space-y-1.5 pt-2 border-t border-slate-100 mb-4">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                        Propuestas Clave:
+                      </span>
+                      {cand.proposals.map((prop, idx) => (
+                        <div key={idx} className="flex items-start gap-2 text-xs text-slate-600">
+                          <span className="w-1.5 h-1.5 rounded-full bg-purple-600 mt-1.5 shrink-0" />
+                          <span className="text-[11px] leading-relaxed line-clamp-2">{prop}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 mt-auto">
                   <button
                     type="button"
-                    onClick={() => setCandidateToDelete(cand)}
-                    className="inline-flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl text-xs font-bold bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 transition-colors cursor-pointer"
-                    title="Eliminar candidatura del tarjetón"
+                    onClick={() => startEditCandidate(cand)}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 transition-colors cursor-pointer"
+                    title="Editar datos de candidatura"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Eliminar</span>
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>Editar Candidato</span>
                   </button>
-                )}
+
+                  {cand.isBlankVote ? (
+                    <span
+                      className="flex-1 text-center py-2 px-2 text-[10px] font-bold text-slate-400 bg-slate-50 rounded-xl border border-slate-100"
+                      title="El voto en blanco es una opción obligatoria por ley"
+                    >
+                      Obligatorio Ley
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setCandidateToDelete(cand)}
+                      className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 transition-colors cursor-pointer"
+                      title="Eliminar candidatura del tarjetón"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Eliminar</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
+          ))}
+        </div>
+      )}
+
+      {/* Table Mode */}
+      {viewMode === 'table' && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-700 uppercase font-black tracking-wider text-[10px] border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4"># Tarjetón</th>
+                  <th className="py-3 px-4">Foto</th>
+                  <th className="py-3 px-4">Nombre del Candidato</th>
+                  <th className="py-3 px-4">Cargo Electoral</th>
+                  <th className="py-3 px-4">Grado / Grupo</th>
+                  <th className="py-3 px-4">Lema de Campaña</th>
+                  <th className="py-3 px-4 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredCandidates.map(cand => (
+                  <tr key={cand.id} className="hover:bg-purple-50/40 transition-colors">
+                    <td className="py-3 px-4">
+                      <div
+                        className="w-8 h-8 rounded-lg flex items-center justify-center font-black text-xs border"
+                        style={{
+                          backgroundColor: cand.isBlankVote ? '#f1f5f9' : `${cand.colorHex}15`,
+                          color: cand.isBlankVote ? '#475569' : cand.colorHex,
+                          borderColor: cand.isBlankVote ? '#cbd5e1' : `${cand.colorHex}40`
+                        }}
+                      >
+                        {cand.number}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4">
+                      {!cand.isBlankVote ? (
+                        <img
+                          src={cand.photoUrl}
+                          alt={cand.fullName}
+                          className="w-9 h-9 rounded-lg object-cover border border-slate-200"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-400">
+                          VB
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 font-bold text-slate-900">
+                      {cand.fullName}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="px-2 py-0.5 rounded-md bg-purple-100 text-purple-800 text-[11px] font-semibold">
+                        {getPositionTitle(cand.positionId)}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-slate-600">
+                      {!cand.isBlankVote ? `${cand.grade} - ${cand.group}` : 'N/A'}
+                    </td>
+                    <td className="py-3 px-4 text-slate-600 italic max-w-xs truncate">
+                      "{cand.slogan}"
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => startEditCandidate(cand)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 transition-colors cursor-pointer"
+                          title="Editar candidato"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Editar</span>
+                        </button>
+
+                        {cand.isBlankVote ? (
+                          <span className="px-2 py-1 text-[10px] font-bold text-slate-400 bg-slate-50 rounded-lg border border-slate-200">
+                            Obligatorio
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setCandidateToDelete(cand)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 transition-colors cursor-pointer"
+                            title="Eliminar candidato"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Eliminar</span>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       {/* Edit Candidate Modal */}
       {editingCandidate && (
@@ -301,7 +594,7 @@ export const CandidateManagerTab: React.FC = () => {
                   <span>Editar Candidatura Oficial</span>
                 </h3>
                 <p className="text-xs text-purple-200">
-                  Cargo: {currentPos.title}
+                  Cargo: {getPositionTitle(editPositionId)}
                 </p>
               </div>
               <button
@@ -313,6 +606,21 @@ export const CandidateManagerTab: React.FC = () => {
             </div>
 
             <form onSubmit={handleEditSubmit} className="p-5 space-y-3.5 text-xs max-h-[75vh] overflow-y-auto">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Cargo Electoral</label>
+                <select
+                  value={editPositionId}
+                  onChange={e => setEditPositionId(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold focus:bg-white"
+                >
+                  {positions.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Número en Tarjetón</label>
@@ -438,7 +746,7 @@ export const CandidateManagerTab: React.FC = () => {
             <p className="text-xs text-slate-600 mb-4 leading-relaxed">
               Está a punto de retirar la candidatura de{' '}
               <strong className="text-slate-900 font-bold">{candidateToDelete.fullName}</strong> (Tarjetón #{candidateToDelete.number}) para el cargo de{' '}
-              <strong className="text-purple-700 font-bold">{currentPos.title}</strong>.
+              <strong className="text-purple-700 font-bold">{getPositionTitle(candidateToDelete.positionId)}</strong>.
             </p>
 
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 mb-4 flex items-start gap-2">
@@ -475,7 +783,7 @@ export const CandidateManagerTab: React.FC = () => {
             <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold">Inscribir Candidatura en Tarjetón</h3>
-                <p className="text-xs text-slate-300">Cargo: {currentPos.title}</p>
+                <p className="text-xs text-slate-300">Cargo: {getPositionTitle(newCandPosId)}</p>
               </div>
               <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-5 h-5" />
@@ -483,6 +791,21 @@ export const CandidateManagerTab: React.FC = () => {
             </div>
 
             <form onSubmit={handleAddSubmit} className="p-5 space-y-3.5 text-xs max-h-[70vh] overflow-y-auto">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Cargo Electoral</label>
+                <select
+                  value={newCandPosId}
+                  onChange={e => setNewCandPosId(e.target.value)}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold focus:bg-white"
+                >
+                  {positions.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Número en Tarjetón</label>

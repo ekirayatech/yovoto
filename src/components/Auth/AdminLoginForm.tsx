@@ -31,7 +31,7 @@ export const AdminLoginForm: React.FC<AdminLoginFormProps> = ({ onCancel }) => {
     setIsSubmitting(true);
 
     setTimeout(() => {
-      const res = loginAdmin(password);
+      const res = loginAdmin(password, username);
       if (!res.success) {
         setErrorMsg(res.error || 'Clave de administrador incorrecta. Verifique sus credenciales.');
         setIsSubmitting(false);

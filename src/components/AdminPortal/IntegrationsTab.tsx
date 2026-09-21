@@ -322,67 +322,84 @@ function findSheet(ss, names) {
       }
     }
   }
+  for (var i = 0; i < names.length; i++) {
+    var target = names[i].toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (target.length < 3) continue;
+    for (var j = 0; j < allSheets.length; j++) {
+      var sName = allSheets[j].getName().toLowerCase().replace(/[^a-z0-9]/g, '');
+      if ((sName.indexOf(target) !== -1 || target.indexOf(sName) !== -1) && allSheets[j].getLastRow() > 0) {
+        return allSheets[j];
+      }
+    }
+  }
   var firstNamed = ss.getSheetByName(names[0]);
   if (firstNamed) return firstNamed;
   for (var k = 0; k < allSheets.length; k++) {
-    if (allSheets[k].getLastRow() > 1) return allSheets[k];
+    if (allSheets[k].getLastRow() > 0) return allSheets[k];
   }
   return allSheets[0] || ss.insertSheet(names[0]);
 }
 
 function parseVoterRows(rows) {
-  if (!rows || rows.length <= 1) return [];
-  var headers = rows[0].map(function(h) {
-    return String(h || '').toLowerCase().trim().replace(/[^a-z0-9áéíóúüñ]/g, '');
-  });
+  if (!rows || rows.length === 0) return [];
+  var firstRowStr = (rows[0] || []).join(' ').toLowerCase();
+  var isHeader = /nombre|documento|tarjeta|cedula|identif|estudiante|alumno|grado|curso|mesa|email|correo/.test(firstRowStr);
+  var startIndex = isHeader ? 1 : 0;
 
-  var colDoc = -1;
-  var colType = -1;
-  var colName = -1;
-  var colGrade = -1;
-  var colGroup = -1;
-  var colMesa = -1;
-  var colEmail = -1;
-  var colVoted = -1;
-  var colDate = -1;
-  var colFolio = -1;
+  var colDoc = -1, colType = -1, colName = -1, colGrade = -1, colGroup = -1, colMesa = -1, colEmail = -1, colVoted = -1, colDate = -1, colFolio = -1;
 
-  for (var c = 0; c < headers.length; c++) {
-    var h = headers[c];
-    if (colDoc === -1 && (h.indexOf('documento') !== -1 || h.indexOf('identif') !== -1 || h.indexOf('tarjeta') !== -1 || h.indexOf('cedula') !== -1 || h.indexOf('numero') !== -1 || h === 'doc' || h === 'ti' || h === 'cc' || h === 'id' || h === 'codigo')) {
-      colDoc = c;
-    } else if (colType === -1 && (h.indexOf('tipo') !== -1 || h === 'td')) {
-      colType = c;
-    } else if (colName === -1 && (h.indexOf('nombre') !== -1 || h.indexOf('estudiante') !== -1 || h.indexOf('alumno') !== -1 || h.indexOf('apellido') !== -1)) {
-      colName = c;
-    } else if (colGrade === -1 && (h.indexOf('grado') !== -1 || h.indexOf('curso') !== -1 || h.indexOf('nivel') !== -1 || h === 'grade')) {
-      colGrade = c;
-    } else if (colGroup === -1 && (h.indexOf('grupo') !== -1 || h.indexOf('seccion') !== -1 || h.indexOf('salon') !== -1)) {
-      colGroup = c;
-    } else if (colMesa === -1 && (h.indexOf('mesa') !== -1 || h.indexOf('puesto') !== -1)) {
-      colMesa = c;
-    } else if (colEmail === -1 && (h.indexOf('correo') !== -1 || h.indexOf('email') !== -1 || h.indexOf('mail') !== -1)) {
-      colEmail = c;
-    } else if (colVoted === -1 && (h.indexOf('vota') !== -1 || h.indexOf('sufrag') !== -1 || h.indexOf('estado') !== -1)) {
-      colVoted = c;
-    } else if (colDate === -1 && (h.indexOf('fecha') !== -1 || h.indexOf('hora') !== -1)) {
-      colDate = c;
-    } else if (colFolio === -1 && (h.indexOf('folio') !== -1 || h.indexOf('certif') !== -1)) {
-      colFolio = c;
+  if (isHeader) {
+    var headers = rows[0].map(function(h) {
+      return String(h || '').toLowerCase().trim().replace(/[^a-z0-9áéíóúüñ]/g, '');
+    });
+    for (var c = 0; c < headers.length; c++) {
+      var h = headers[c];
+      if (colDoc === -1 && (h.indexOf('documento') !== -1 || h.indexOf('identif') !== -1 || h.indexOf('tarjeta') !== -1 || h.indexOf('cedula') !== -1 || h.indexOf('numero') !== -1 || h === 'doc' || h === 'ti' || h === 'cc' || h === 'id' || h === 'codigo')) {
+        colDoc = c;
+      } else if (colType === -1 && (h.indexOf('tipo') !== -1 || h === 'td')) {
+        colType = c;
+      } else if (colName === -1 && (h.indexOf('nombre') !== -1 || h.indexOf('estudiante') !== -1 || h.indexOf('alumno') !== -1 || h.indexOf('apellido') !== -1)) {
+        colName = c;
+      } else if (colGrade === -1 && (h.indexOf('grado') !== -1 || h.indexOf('curso') !== -1 || h.indexOf('nivel') !== -1 || h === 'grade')) {
+        colGrade = c;
+      } else if (colGroup === -1 && (h.indexOf('grupo') !== -1 || h.indexOf('seccion') !== -1 || h.indexOf('salon') !== -1)) {
+        colGroup = c;
+      } else if (colMesa === -1 && (h.indexOf('mesa') !== -1 || h.indexOf('puesto') !== -1)) {
+        colMesa = c;
+      } else if (colEmail === -1 && (h.indexOf('correo') !== -1 || h.indexOf('email') !== -1 || h.indexOf('mail') !== -1)) {
+        colEmail = c;
+      } else if (colVoted === -1 && (h.indexOf('vota') !== -1 || h.indexOf('sufrag') !== -1 || h.indexOf('estado') !== -1)) {
+        colVoted = c;
+      } else if (colDate === -1 && (h.indexOf('fecha') !== -1 || h.indexOf('hora') !== -1)) {
+        colDate = c;
+      } else if (colFolio === -1 && (h.indexOf('folio') !== -1 || h.indexOf('certif') !== -1)) {
+        colFolio = c;
+      }
     }
   }
 
-  // Fallbacks si los encabezados no tienen nombres convencionales
-  if (colDoc === -1) colDoc = (colType === 0) ? 1 : 0;
-  if (colName === -1) colName = (colDoc === 0) ? 1 : (colDoc === 1 ? 2 : 1);
-  if (colGrade === -1 && headers.length > 2) colGrade = 2;
-  if (colGroup === -1 && headers.length > 3) colGroup = 3;
-  if (colMesa === -1 && headers.length > 4) colMesa = 4;
+  var sampleRow = rows[startIndex] || [];
+  if (colDoc === -1) {
+    for (var c = 0; c < sampleRow.length; c++) {
+      var val = String(sampleRow[c] || '').trim();
+      if (/^\d{5,15}$/.test(val)) { colDoc = c; break; }
+    }
+    if (colDoc === -1) colDoc = 0;
+  }
+  if (colName === -1) {
+    for (var c = 0; c < sampleRow.length; c++) {
+      if (c !== colDoc && typeof sampleRow[c] === 'string' && sampleRow[c].trim().length > 3 && sampleRow[c].indexOf('@') === -1) {
+        colName = c; break;
+      }
+    }
+    if (colName === -1) colName = (colDoc === 0 ? 1 : 0);
+  }
 
   var students = [];
-  for (var i = 1; i < rows.length; i++) {
+  for (var i = startIndex; i < rows.length; i++) {
     var r = rows[i];
-    var rawDoc = colDoc !== -1 ? r[colDoc] : '';
+    if (!r || r.length === 0) continue;
+    var rawDoc = colDoc !== -1 ? r[colDoc] : r[0];
     if (rawDoc === '' || rawDoc === null || rawDoc === undefined) continue;
     var docStr = String(rawDoc).trim().replace(/\.0$/, '');
     if (!docStr) continue;
@@ -391,7 +408,7 @@ function parseVoterRows(rows) {
     var hasVoted = rawVoted === true || String(rawVoted).toUpperCase() === 'SI' || String(rawVoted).toUpperCase() === 'TRUE' || String(rawVoted).toUpperCase() === 'VOTÓ' || String(rawVoted).toUpperCase() === 'VOTO';
 
     students.push({
-      id: 'est-' + i,
+      id: 'est-' + (i + 1),
       documentType: colType !== -1 && r[colType] ? String(r[colType]).toUpperCase().trim() : 'TI',
       documentNumber: docStr,
       fullName: colName !== -1 && r[colName] ? String(r[colName]).trim() : 'Estudiante ' + docStr,
@@ -405,6 +422,187 @@ function parseVoterRows(rows) {
     });
   }
   return students;
+}
+
+function parseCandidateRows(rows) {
+  if (!rows || rows.length === 0) return [];
+  var firstRowStr = (rows[0] || []).join(' ').toLowerCase();
+  var isHeader = /nombre|candidato|cargo|position|numero|tarjeton|lema|propuesta|foto|color/.test(firstRowStr);
+  var startIndex = isHeader ? 1 : 0;
+
+  var candidates = [];
+  for (var i = startIndex; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r || r.length === 0) continue;
+    var nonEmpties = r.filter(function(v) { return v !== '' && v !== null && v !== undefined; });
+    if (nonEmpties.length === 0) continue;
+
+    var num = '', name = '', posId = 'personeria', gr = '', gp = '', lem = '', col = '#7e22ce', pho = '', props = [];
+    var isBlank = false;
+
+    for (var c = 0; c < r.length; c++) {
+      var val = String(r[c] || '').trim();
+      var valLower = val.toLowerCase();
+      if (!val) continue;
+
+      if (valLower.indexOf('blanco') !== -1) {
+        isBlank = true;
+        name = 'Voto en Blanco';
+      } else if (!num && (/^\d{1,3}$/.test(val) || /^#\d+/.test(val))) {
+        num = val.replace('#', '');
+      } else if (valLower.indexOf('person') !== -1) {
+        posId = 'personeria';
+      } else if (valLower.indexOf('contra') !== -1) {
+        posId = 'contraloria';
+      } else if (valLower.indexOf('cabil') !== -1) {
+        posId = 'cabildante';
+      } else if (valLower.indexOf('comis') !== -1 || valLower.indexOf('conviv') !== -1) {
+        posId = 'comisario';
+      } else if (valLower.indexOf('http') === 0) {
+        pho = val;
+      } else if (/^#[0-9a-f]{6}$/i.test(val)) {
+        col = val;
+      } else if (val.indexOf(';') !== -1 || val.indexOf('|') !== -1) {
+        props = val.split(/[;|]/).map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; });
+      } else if (/^\d{1,2}[°o]?$/.test(val) || /grado/i.test(val)) {
+        gr = val;
+      } else if (/^\d{1,2}-[a-zA-Z]$/.test(val) || /^[a-zA-Z]$/.test(val)) {
+        gp = val;
+      } else if (!name && val.length > 2 && !/^\d+$/.test(val)) {
+        name = val;
+      } else if (!lem && val.length > 8) {
+        lem = val;
+      }
+    }
+
+    if (!name && !num) continue;
+
+    candidates.push({
+      id: 'cand-' + (i + 1),
+      positionId: posId,
+      fullName: name || ('Candidato #' + (num || i + 1)),
+      number: num ? (num.length === 1 ? '0' + num : num) : (i < 9 ? '0' + (i + 1) : String(i + 1)),
+      grade: gr || '11°',
+      group: gp || '11-A',
+      slogan: lem || 'Liderazgo, transparencia y compromiso escolar.',
+      colorHex: col,
+      photoUrl: pho || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80',
+      proposals: props.length > 0 ? props : ['Participación democrática estudiantil', 'Bienestar y convivencia escolar'],
+      isBlankVote: isBlank
+    });
+  }
+  return candidates;
+}
+
+function parseJuradoRows(rows) {
+  if (!rows || rows.length === 0) return [];
+  var firstRowStr = (rows[0] || []).join(' ').toLowerCase();
+  var isHeader = /nombre|jurado|mesa|rol|role|pin|clave|password|estado|status/.test(firstRowStr);
+  var startIndex = isHeader ? 1 : 0;
+
+  var jurados = [];
+  for (var i = startIndex; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r || r.length === 0) continue;
+    var nonEmpties = r.filter(function(v) { return v !== '' && v !== null && v !== undefined; });
+    if (nonEmpties.length === 0) continue;
+
+    var mesa = 1, name = '', role = 'PRESIDENTE_MESA', pin = '', st = 'ACTIVO';
+
+    for (var c = 0; c < r.length; c++) {
+      var val = String(r[c] || '').trim();
+      var valLower = val.toLowerCase();
+      if (!val) continue;
+
+      if (/^\d{1,2}$/.test(val) && Number(val) >= 1 && Number(val) <= 40) {
+        mesa = Number(val);
+      } else if (valLower.indexOf('presid') !== -1) {
+        role = 'PRESIDENTE_MESA';
+      } else if (valLower.indexOf('vocal') !== -1) {
+        role = 'VOCAL_MESA';
+      } else if (valLower.indexOf('secre') !== -1) {
+        role = 'SECRETARIO_MESA';
+      } else if (valLower === 'inactivo' || valLower === 'bloqueado' || valLower === 'false') {
+        st = 'INACTIVO';
+      } else if (valLower === 'activo' || valLower === 'true') {
+        st = 'ACTIVO';
+      } else if (!pin && (/^[a-zA-Z0-9_-]{4,15}$/.test(val) && (/\d/.test(val) || valLower.indexOf('jur') !== -1))) {
+        pin = val;
+      } else if (!name && val.length > 2 && isNaN(Number(val))) {
+        name = val;
+      }
+    }
+
+    if (!name) continue;
+
+    jurados.push({
+      id: 'jur-' + (i + 1),
+      mesaNumber: mesa,
+      fullName: name,
+      role: role,
+      pin: pin || ('jurado' + (i + 1)),
+      status: st
+    });
+  }
+  return jurados;
+}
+
+function parseAdminRows(rows) {
+  if (!rows || rows.length === 0) return [];
+  var firstRowStr = (rows[0] || []).join(' ').toLowerCase();
+  var isHeader = /nombre|admin|usuario|username|correo|email|pin|clave|password|rol|role|cargo/.test(firstRowStr);
+  var startIndex = isHeader ? 1 : 0;
+
+  var admins = [];
+  for (var i = startIndex; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r || r.length === 0) continue;
+    var nonEmpties = r.filter(function(v) { return v !== '' && v !== null && v !== undefined; });
+    if (nonEmpties.length === 0) continue;
+
+    var name = '', user = '', pin = '', role = 'SUPER_ADMIN', st = 'ACTIVO';
+
+    for (var c = 0; c < r.length; c++) {
+      var val = String(r[c] || '').trim();
+      var valLower = val.toLowerCase();
+      if (!val) continue;
+
+      if (val.indexOf('@') !== -1) {
+        user = val;
+        if (!name) name = val.split('@')[0];
+      } else if (valLower.indexOf('super') !== -1) {
+        role = 'SUPER_ADMIN';
+      } else if (valLower.indexOf('auditor') !== -1 || valLower.indexOf('veed') !== -1) {
+        role = 'AUDITOR_SISTEMA';
+      } else if (valLower.indexOf('rector') !== -1 || valLower.indexOf('direct') !== -1) {
+        role = 'RECTOR';
+      } else if (valLower.indexOf('coord') !== -1) {
+        role = 'COORDINADOR_DEMOCRACIA';
+      } else if (valLower === 'inactivo' || valLower === 'bloqueado' || valLower === 'false') {
+        st = 'INACTIVO';
+      } else if (valLower === 'activo' || valLower === 'true') {
+        st = 'ACTIVO';
+      } else if (!pin && /^[a-zA-Z0-9_\-.]{4,20}$/.test(val) && (/\d/.test(val) || valLower.indexOf('admin') !== -1 || valLower.indexOf('pass') !== -1)) {
+        pin = val;
+      } else if (!user && /^[a-z0-9_.\-]{3,25}$/i.test(val) && isNaN(Number(val))) {
+        user = val;
+      } else if (!name && val.length > 2 && isNaN(Number(val))) {
+        name = val;
+      }
+    }
+
+    if (!name && !user) continue;
+
+    admins.push({
+      id: 'adm-' + (i + 1),
+      fullName: name || user,
+      username: user || (name.toLowerCase().replace(/[^a-z0-9]/g, '') + '@ekiraya.edu.co'),
+      pin: pin || 'admin2026',
+      role: role,
+      status: st
+    });
+  }
+  return admins;
 }
 
 // -------------------------------------------------------------------------
@@ -444,88 +642,58 @@ function doGet(e) {
 
   // B. LECTURA: Base de Datos de Candidatos
   if (action === "getCandidates") {
-    var sheet = findSheet(ss, ["Candidatos", "Candidates", "Tarjeton", "Tarjetón"]);
+    var sheet = findSheet(ss, ["Candidatos", "Candidates", "Tarjeton", "Tarjetón", "Aspirantes"]);
     var rows = sheet.getDataRange().getValues();
-    if (rows.length <= 1) return respondJSON({ success: true, count: 0, candidates: [] });
-    var candidates = [];
-    for (var i = 1; i < rows.length; i++) {
-      var r = rows[i];
-      if (!r[0] && !r[2]) continue;
-      candidates.push({
-        id: String(r[0] || ('cand-' + i)),
-        positionId: String(r[1] || 'personero'),
-        fullName: String(r[2] || ''),
-        number: Number(r[3]) || 0,
-        grade: String(r[4] || ""),
-        group: String(r[5] || ""),
-        lema: String(r[6] || ""),
-        color: String(r[7] || "#1e3a8a"),
-        photoUrl: String(r[8] || ""),
-        proposals: r[9] ? String(r[9]).split(";") : [],
-        isBlankVote: r[10] === true || String(r[10]).toUpperCase() === "SI" || String(r[10]).toUpperCase() === "TRUE"
-      });
-    }
+    var candidates = parseCandidateRows(rows);
     return respondJSON({ success: true, count: candidates.length, candidates: candidates });
   }
 
   // C. LECTURA: Base de Datos de Jurados
   if (action === "getJurados") {
-    var sheet = findSheet(ss, ["Jurados", "Jurados_Votacion", "Mesas"]);
+    var sheet = findSheet(ss, ["Jurados", "Jurados_Votacion", "Mesas", "Jurado"]);
     var rows = sheet.getDataRange().getValues();
-    if (rows.length <= 1) return respondJSON({ success: true, count: 0, jurados: [] });
-    var jurados = [];
-    for (var i = 1; i < rows.length; i++) {
-      var r = rows[i];
-      if (!r[0] && !r[2]) continue;
-      jurados.push({
-        id: String(r[0] || ('jur-' + i)),
-        mesaNumber: Number(r[1]) || 1,
-        fullName: String(r[2] || ""),
-        role: String(r[3] || "PRESIDENTE_MESA"),
-        pin: String(r[4] || "jurado2026"),
-        status: String(r[5] || "ACTIVO")
-      });
-    }
+    var jurados = parseJuradoRows(rows);
     return respondJSON({ success: true, count: jurados.length, jurados: jurados });
   }
 
   // D. LECTURA: Base de Datos de Administradores
   if (action === "getAdmins") {
-    var sheet = findSheet(ss, ["Administradores", "Admins", "Supervisores"]);
+    var sheet = findSheet(ss, ["Administradores", "Admins", "Supervisores", "Admin", "Docentes"]);
     var rows = sheet.getDataRange().getValues();
-    if (rows.length <= 1) return respondJSON({ success: true, count: 0, admins: [] });
-    var admins = [];
-    for (var i = 1; i < rows.length; i++) {
-      var r = rows[i];
-      if (!r[0] && !r[1]) continue;
-      admins.push({
-        id: String(r[0] || ('adm-' + i)),
-        fullName: String(r[1] || ""),
-        username: String(r[2] || "admin"),
-        pin: String(r[3] || "admin2026"),
-        role: String(r[4] || "SUPER_ADMIN"),
-        status: String(r[5] || "ACTIVO")
-      });
-    }
+    var admins = parseAdminRows(rows);
     return respondJSON({ success: true, count: admins.length, admins: admins });
   }
 
   // E. LECTURA INTEGRAL DE TODAS LAS 4 BASES DE DATOS
   if (action === "getAllData") {
     var vSheet = findSheet(ss, ["Votantes", "Censo_Estudiantil", "Censo Estudiantil", "Censo", "Estudiantes"]);
-    var cSheet = findSheet(ss, ["Candidatos", "Candidates"]);
-    var jSheet = findSheet(ss, ["Jurados", "Jurados_Votacion"]);
-    var aSheet = findSheet(ss, ["Administradores", "Admins"]);
+    var cSheet = findSheet(ss, ["Candidatos", "Candidates", "Tarjeton"]);
+    var jSheet = findSheet(ss, ["Jurados", "Jurados_Votacion", "Mesas"]);
+    var aSheet = findSheet(ss, ["Administradores", "Admins", "Supervisores"]);
+
+    var vRows = vSheet ? vSheet.getDataRange().getValues() : [];
+    var cRows = cSheet ? cSheet.getDataRange().getValues() : [];
+    var jRows = jSheet ? jSheet.getDataRange().getValues() : [];
+    var aRows = aSheet ? aSheet.getDataRange().getValues() : [];
+
+    var voters = parseVoterRows(vRows);
+    var candidates = parseCandidateRows(cRows);
+    var jurados = parseJuradoRows(jRows);
+    var admins = parseAdminRows(aRows);
 
     return respondJSON({
       success: true,
       institution: "Colegio Bilingüe Ekirayá",
       counts: {
-        voters: vSheet ? Math.max(0, vSheet.getLastRow() - 1) : 0,
-        candidates: cSheet ? Math.max(0, cSheet.getLastRow() - 1) : 0,
-        jurados: jSheet ? Math.max(0, jSheet.getLastRow() - 1) : 0,
-        admins: aSheet ? Math.max(0, aSheet.getLastRow() - 1) : 0
+        voters: voters.length,
+        candidates: candidates.length,
+        jurados: jurados.length,
+        admins: admins.length
       },
+      voters: voters,
+      candidates: candidates,
+      jurados: jurados,
+      admins: admins,
       timestamp: new Date().toISOString()
     });
   }
