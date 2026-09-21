@@ -13,7 +13,8 @@ import {
   MapPin,
   Scale,
   Shield,
-  UserCheck
+  UserCheck,
+  Users
 } from 'lucide-react';
 import React, { useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
@@ -174,11 +175,22 @@ export const BallotBox: React.FC<BallotBoxProps> = ({ onProceedToConfirm }) => {
       </div>
 
       {/* Tarjetón Electoral Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 mb-8">
         {positionCandidates.map(candidate => {
           const isSelected = currentSelection === candidate.id;
           const isBlank = candidate.isBlankVote;
           const isProposalsExpanded = !!expandedProposals[candidate.id];
+
+          // Formula candidate data resolution
+          const principalName = candidate.principalName || candidate.fullName;
+          const principalPhoto = candidate.principalPhotoUrl || candidate.photoUrl;
+          const principalGrade = candidate.principalGrade || candidate.grade;
+          const principalGroup = candidate.principalGroup || candidate.group;
+
+          const suplenteName = candidate.suplenteName || (candidate.fullName.includes('&') ? candidate.fullName.split('&')[1].trim() : 'Suplente Inscrito');
+          const suplentePhoto = candidate.suplentePhotoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80';
+          const suplenteGrade = candidate.suplenteGrade || candidate.grade;
+          const suplenteGroup = candidate.suplenteGroup || candidate.group;
 
           return (
             <div
@@ -195,28 +207,45 @@ export const BallotBox: React.FC<BallotBoxProps> = ({ onProceedToConfirm }) => {
             >
               {/* Top Accent Strip */}
               <div
-                className="h-2 w-full"
+                className="h-2.5 w-full"
                 style={{ backgroundColor: isBlank ? '#64748b' : candidate.colorHex }}
               />
 
-              <div className="p-5 flex-1">
+              <div className="p-4 sm:p-5 flex-1">
                 {/* Candidate Tarjetón Number & Selector Checkbox */}
-                <div className="flex items-start justify-between gap-2 mb-4">
-                  <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center font-black text-xl shadow-xs border"
-                    style={{
-                      backgroundColor: isBlank ? '#f1f5f9' : `${candidate.colorHex}15`,
-                      color: isBlank ? '#475569' : candidate.colorHex,
-                      borderColor: isBlank ? '#cbd5e1' : `${candidate.colorHex}40`
-                    }}
-                  >
-                    {candidate.number}
+                <div className="flex items-center justify-between gap-2 mb-3.5">
+                  <div className="flex items-center gap-2.5">
+                    <div
+                      className="w-12 h-12 rounded-xl flex items-center justify-center font-black text-xl shadow-xs border"
+                      style={{
+                        backgroundColor: isBlank ? '#f1f5f9' : `${candidate.colorHex}15`,
+                        color: isBlank ? '#475569' : candidate.colorHex,
+                        borderColor: isBlank ? '#cbd5e1' : `${candidate.colorHex}40`
+                      }}
+                    >
+                      {candidate.number}
+                    </div>
+                    {!isBlank ? (
+                      <div>
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200">
+                          <Users className="w-3 h-3 text-purple-600" />
+                          Fórmula Electoral
+                        </span>
+                        <div className="text-[11px] text-slate-500 font-medium mt-0.5">
+                          Principal y Suplente
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-slate-200 text-slate-700">
+                        Voto en Blanco
+                      </span>
+                    )}
                   </div>
 
                   <div
-                    className={`w-8 h-8 rounded-full border-2 flex items-center justify-center transition-all ${
+                    className={`w-9 h-9 rounded-full border-2 flex items-center justify-center transition-all ${
                       isSelected
-                        ? 'bg-purple-700 border-purple-700 text-white shadow-xs'
+                        ? 'bg-purple-700 border-purple-700 text-white shadow-xs scale-105'
                         : 'border-slate-300 bg-white group-hover:border-purple-400'
                     }`}
                   >
@@ -224,36 +253,89 @@ export const BallotBox: React.FC<BallotBoxProps> = ({ onProceedToConfirm }) => {
                   </div>
                 </div>
 
-                {/* Photo and Identity */}
-                <div className="flex items-center gap-3.5 mb-3">
-                  {isBlank ? (
+                {/* Identity Presentation */}
+                {isBlank ? (
+                  /* Voto en Blanco Layout */
+                  <div className="flex items-center gap-3.5 mb-3.5 p-3.5 bg-slate-100/70 rounded-2xl border border-slate-200">
                     <div className="w-16 h-16 rounded-xl bg-slate-200 border border-slate-300 flex items-center justify-center text-slate-500 shrink-0">
                       <FileText className="w-8 h-8 text-slate-400" />
                     </div>
-                  ) : (
-                    <img
-                      src={candidate.photoUrl}
-                      alt={candidate.fullName}
-                      referrerPolicy="no-referrer"
-                      className="w-16 h-16 rounded-xl object-cover border-2 border-slate-200 shrink-0 shadow-xs"
-                    />
-                  )}
-                  <div>
-                    <h4 className="text-base font-black text-slate-900 leading-tight">
-                      {candidate.fullName}
-                    </h4>
-                    {!isBlank && (
-                      <p className="text-xs font-semibold text-purple-700 mt-0.5">
-                        Grado {candidate.grade} • Grupo {candidate.group}
-                      </p>
-                    )}
-                    {isBlank && (
+                    <div>
+                      <h4 className="text-base font-black text-slate-900 leading-tight">
+                        VOTO EN BLANCO
+                      </h4>
                       <span className="inline-block mt-0.5 text-[11px] font-bold text-slate-500 uppercase tracking-wide">
                         Opción Constitucional
                       </span>
-                    )}
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                        Expresión democrática de desacuerdo conforme a la ley colombiana.
+                      </p>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  /* FÓRMULA ELECTORAL: Espacios para dos nombres y dos fotos */
+                  <div className="grid grid-cols-2 gap-2.5 mb-3.5 bg-slate-50/90 p-2.5 sm:p-3 rounded-2xl border border-slate-200/90 shadow-2xs">
+                    {/* Candidato Principal */}
+                    <div className="flex flex-col items-center text-center">
+                      <div className="relative mb-2">
+                        {principalPhoto ? (
+                          <img
+                            src={principalPhoto}
+                            alt={principalName}
+                            referrerPolicy="no-referrer"
+                            className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl object-cover border-2 border-purple-300 shadow-2xs group-hover:border-purple-400 transition-colors"
+                          />
+                        ) : (
+                          <div className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl bg-purple-100 border-2 border-purple-300 flex items-center justify-center text-purple-700 font-bold text-lg">
+                            {principalName.charAt(0)}
+                          </div>
+                        )}
+                        <span className="absolute -bottom-1.5 inset-x-0 mx-auto w-max px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-purple-700 text-white shadow-2xs">
+                          Principal
+                        </span>
+                      </div>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-purple-700 mt-1">
+                        Candidato Principal
+                      </span>
+                      <h4 className="text-xs sm:text-sm font-black text-slate-900 leading-tight line-clamp-2 mt-0.5 min-h-[2rem] flex items-center justify-center">
+                        {principalName}
+                      </h4>
+                      <p className="text-[10px] font-semibold text-slate-500 mt-0.5">
+                        Grado {principalGrade} ({principalGroup})
+                      </p>
+                    </div>
+
+                    {/* Candidato Suplente */}
+                    <div className="flex flex-col items-center text-center border-l border-slate-200/90 pl-2.5">
+                      <div className="relative mb-2">
+                        {suplentePhoto ? (
+                          <img
+                            src={suplentePhoto}
+                            alt={suplenteName}
+                            referrerPolicy="no-referrer"
+                            className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl object-cover border-2 border-indigo-300 shadow-2xs group-hover:border-indigo-400 transition-colors"
+                          />
+                        ) : (
+                          <div className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl bg-indigo-100 border-2 border-indigo-300 flex items-center justify-center text-indigo-700 font-bold text-lg">
+                            {suplenteName.charAt(0)}
+                          </div>
+                        )}
+                        <span className="absolute -bottom-1.5 inset-x-0 mx-auto w-max px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-indigo-700 text-white shadow-2xs">
+                          Suplente
+                        </span>
+                      </div>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-700 mt-1">
+                        Candidato Suplente
+                      </span>
+                      <h4 className="text-xs sm:text-sm font-black text-slate-900 leading-tight line-clamp-2 mt-0.5 min-h-[2rem] flex items-center justify-center">
+                        {suplenteName}
+                      </h4>
+                      <p className="text-[10px] font-semibold text-slate-500 mt-0.5">
+                        Grado {suplenteGrade} ({suplenteGroup})
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Slogan */}
                 <p className="text-xs text-slate-600 italic bg-slate-50 p-2.5 rounded-xl border border-slate-100 line-clamp-2 mb-3">
@@ -273,7 +355,7 @@ export const BallotBox: React.FC<BallotBoxProps> = ({ onProceedToConfirm }) => {
                     >
                       <span className="flex items-center gap-1.5">
                         <Info className="w-3.5 h-3.5" />
-                        {isProposalsExpanded ? 'Ocultar Propuestas' : 'Ver Propuestas Clave'}
+                        {isProposalsExpanded ? 'Ocultar Propuestas de la Fórmula' : 'Ver Propuestas de la Fórmula'}
                       </span>
                       {isProposalsExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                     </button>

@@ -45,24 +45,36 @@ export const CandidateManagerTab: React.FC = () => {
   const [candidateToDelete, setCandidateToDelete] = useState<Candidate | null>(null);
   const [notificationMsg, setNotificationMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // New Candidate Form State
+  // New Candidate Form State (Fórmula Electoral)
   const [candNumber, setCandNumber] = useState<string>('03');
   const [newCandPosId, setNewCandPosId] = useState<string>(positions[0]?.id || 'personeria');
-  const [fullName, setFullName] = useState<string>('');
-  const [grade, setGrade] = useState<string>('11°');
-  const [group, setGroup] = useState<string>('11-C');
-  const [photoUrl, setPhotoUrl] = useState<string>('https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80');
+  const [principalName, setPrincipalName] = useState<string>('');
+  const [principalGrade, setPrincipalGrade] = useState<string>('11°');
+  const [principalGroup, setPrincipalGroup] = useState<string>('11-A');
+  const [principalPhotoUrl, setPrincipalPhotoUrl] = useState<string>('https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80');
+
+  const [suplenteName, setSuplenteName] = useState<string>('');
+  const [suplenteGrade, setSuplenteGrade] = useState<string>('11°');
+  const [suplenteGroup, setSuplenteGroup] = useState<string>('11-A');
+  const [suplentePhotoUrl, setSuplentePhotoUrl] = useState<string>('https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=320&q=80');
+
   const [slogan, setSlogan] = useState<string>('');
   const [proposalsText, setProposalsText] = useState<string>('');
   const [colorHex, setColorHex] = useState<string>('#7e22ce');
 
-  // Edit Candidate Form State
+  // Edit Candidate Form State (Fórmula Electoral)
   const [editNumber, setEditNumber] = useState<string>('');
-  const [editFullName, setEditFullName] = useState<string>('');
   const [editPositionId, setEditPositionId] = useState<string>('personeria');
-  const [editGrade, setEditGrade] = useState<string>('11°');
-  const [editGroup, setEditGroup] = useState<string>('11-A');
-  const [editPhotoUrl, setEditPhotoUrl] = useState<string>('');
+  const [editPrincipalName, setEditPrincipalName] = useState<string>('');
+  const [editPrincipalGrade, setEditPrincipalGrade] = useState<string>('11°');
+  const [editPrincipalGroup, setEditPrincipalGroup] = useState<string>('11-A');
+  const [editPrincipalPhotoUrl, setEditPrincipalPhotoUrl] = useState<string>('');
+
+  const [editSuplenteName, setEditSuplenteName] = useState<string>('');
+  const [editSuplenteGrade, setEditSuplenteGrade] = useState<string>('11°');
+  const [editSuplenteGroup, setEditSuplenteGroup] = useState<string>('11-A');
+  const [editSuplentePhotoUrl, setEditSuplentePhotoUrl] = useState<string>('');
+
   const [editSlogan, setEditSlogan] = useState<string>('');
   const [editProposalsText, setEditProposalsText] = useState<string>('');
   const [editColorHex, setEditColorHex] = useState<string>('#7e22ce');
@@ -118,40 +130,58 @@ export const CandidateManagerTab: React.FC = () => {
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!fullName.trim() || !candNumber.trim()) return;
+    if (!principalName.trim() || !candNumber.trim()) return;
 
     const proposalsArray = proposalsText
       .split('\n')
       .map(p => p.trim())
       .filter(p => p.length > 0);
 
+    const sName = suplenteName.trim() || 'Suplente de Fórmula';
+    const comboFullName = `${principalName.trim()} & ${sName}`;
+
     addCandidate({
       number: candNumber.trim(),
       positionId: newCandPosId || (selectedPosId !== 'all' ? selectedPosId : positions[0]?.id || 'personeria'),
-      fullName: fullName.trim(),
-      grade,
-      group,
-      photoUrl: photoUrl.trim() || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80',
+      fullName: comboFullName,
+      principalName: principalName.trim(),
+      principalGrade,
+      principalGroup,
+      principalPhotoUrl: principalPhotoUrl.trim() || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80',
+      suplenteName: sName,
+      suplenteGrade,
+      suplenteGroup,
+      suplentePhotoUrl: suplentePhotoUrl.trim() || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=320&q=80',
+      grade: principalGrade,
+      group: principalGroup,
+      photoUrl: principalPhotoUrl.trim() || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80',
       slogan: slogan.trim() || 'Compromiso y liderazgo para toda la comunidad escolar.',
       proposals: proposalsArray.length > 0 ? proposalsArray : ['Participación activa y defensa de los derechos estudiantiles.'],
       colorHex
     });
 
     setIsAddModalOpen(false);
-    setFullName('');
+    setPrincipalName('');
+    setSuplenteName('');
     setSlogan('');
     setProposalsText('');
-    showNotification('success', `Candidato ${fullName} registrado en el tarjetón con éxito.`);
+    showNotification('success', `Fórmula ${comboFullName} registrada en el tarjetón con éxito.`);
   };
 
   const startEditCandidate = (cand: Candidate) => {
     setEditingCandidate(cand);
     setEditNumber(cand.number);
     setEditPositionId(cand.positionId);
-    setEditFullName(cand.fullName);
-    setEditGrade(cand.grade || '11°');
-    setEditGroup(cand.group || '11-A');
-    setEditPhotoUrl(cand.photoUrl || '');
+    setEditPrincipalName(cand.principalName || (cand.fullName.includes('&') ? cand.fullName.split('&')[0].trim() : cand.fullName));
+    setEditPrincipalGrade(cand.principalGrade || cand.grade || '11°');
+    setEditPrincipalGroup(cand.principalGroup || cand.group || '11-A');
+    setEditPrincipalPhotoUrl(cand.principalPhotoUrl || cand.photoUrl || '');
+
+    setEditSuplenteName(cand.suplenteName || (cand.fullName.includes('&') ? cand.fullName.split('&')[1].trim() : ''));
+    setEditSuplenteGrade(cand.suplenteGrade || cand.grade || '11°');
+    setEditSuplenteGroup(cand.suplenteGroup || cand.group || '11-A');
+    setEditSuplentePhotoUrl(cand.suplentePhotoUrl || '');
+
     setEditSlogan(cand.slogan || '');
     setEditProposalsText((cand.proposals || []).join('\n'));
     setEditColorHex(cand.colorHex || '#7e22ce');
@@ -159,21 +189,34 @@ export const CandidateManagerTab: React.FC = () => {
 
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingCandidate || !editFullName.trim() || !editNumber.trim()) return;
+    if (!editingCandidate || !editPrincipalName.trim() || !editNumber.trim()) return;
 
     const proposalsArray = editProposalsText
       .split('\n')
       .map(p => p.trim())
       .filter(p => p.length > 0);
 
+    const sName = editSuplenteName.trim() || (editingCandidate.isBlankVote ? '' : 'Suplente de Fórmula');
+    const comboFullName = editingCandidate.isBlankVote
+      ? 'Voto en Blanco'
+      : (sName ? `${editPrincipalName.trim()} & ${sName}` : editPrincipalName.trim());
+
     const updated: Candidate = {
       ...editingCandidate,
       number: editNumber.trim(),
       positionId: editPositionId,
-      fullName: editFullName.trim(),
-      grade: editGrade,
-      group: editGroup,
-      photoUrl: editPhotoUrl.trim() || editingCandidate.photoUrl,
+      fullName: comboFullName,
+      principalName: editPrincipalName.trim(),
+      principalGrade: editPrincipalGrade,
+      principalGroup: editPrincipalGroup,
+      principalPhotoUrl: editPrincipalPhotoUrl.trim() || editingCandidate.principalPhotoUrl || editingCandidate.photoUrl,
+      suplenteName: sName,
+      suplenteGrade: editSuplenteGrade,
+      suplenteGroup: editSuplenteGroup,
+      suplentePhotoUrl: editSuplentePhotoUrl.trim() || editingCandidate.suplentePhotoUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=320&q=80',
+      grade: editPrincipalGrade,
+      group: editPrincipalGroup,
+      photoUrl: editPrincipalPhotoUrl.trim() || editingCandidate.photoUrl,
       slogan: editSlogan.trim() || editingCandidate.slogan,
       proposals: proposalsArray,
       colorHex: editColorHex
@@ -181,7 +224,7 @@ export const CandidateManagerTab: React.FC = () => {
 
     updateCandidate(updated);
     setEditingCandidate(null);
-    showNotification('success', `Candidatura de ${editFullName} actualizada correctamente.`);
+    showNotification('success', `Fórmula de ${comboFullName} actualizada correctamente.`);
   };
 
   const handleConfirmDelete = () => {
@@ -415,23 +458,76 @@ export const CandidateManagerTab: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 mb-3">
-                    {!cand.isBlankVote && (
-                      <img
-                        src={cand.photoUrl}
-                        alt={cand.fullName}
-                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
-                      />
-                    )}
-                    <div className="min-w-0">
-                      <h4 className="text-base font-black text-slate-900 leading-tight truncate">
-                        {cand.fullName}
-                      </h4>
-                      <p className="text-xs font-semibold text-purple-700 mt-0.5">
-                        {!cand.isBlankVote ? `Grado ${cand.grade} • Grupo ${cand.group}` : 'Opción Constitucional'}
-                      </p>
+                  {/* Formula presentation */}
+                  {cand.isBlankVote ? (
+                    <div className="flex items-center gap-3 mb-3 p-2 bg-slate-50 rounded-xl border border-slate-100">
+                      <div className="w-12 h-12 rounded-xl bg-slate-200 border border-slate-300 flex items-center justify-center text-slate-500 shrink-0 font-black text-xs">
+                        VB
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-black text-slate-900 leading-tight">
+                          Voto en Blanco
+                        </h4>
+                        <p className="text-[11px] font-semibold text-slate-500 mt-0.5">
+                          Opción Constitucional
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 mb-3 bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
+                      {/* Principal */}
+                      <div className="flex flex-col items-center text-center">
+                        <div className="relative mb-1.5">
+                          {cand.principalPhotoUrl || cand.photoUrl ? (
+                            <img
+                              src={cand.principalPhotoUrl || cand.photoUrl}
+                              alt={cand.principalName || cand.fullName}
+                              className="w-14 h-14 rounded-xl object-cover border-2 border-purple-300 shadow-2xs"
+                            />
+                          ) : (
+                            <div className="w-14 h-14 rounded-xl bg-purple-100 border-2 border-purple-300 flex items-center justify-center text-purple-700 font-bold text-sm">
+                              {(cand.principalName || cand.fullName).charAt(0)}
+                            </div>
+                          )}
+                          <span className="absolute -bottom-1 inset-x-0 mx-auto w-max px-1.5 py-0.2 rounded-full text-[8px] font-black uppercase tracking-wider bg-purple-700 text-white">
+                            Principal
+                          </span>
+                        </div>
+                        <h5 className="text-xs font-black text-slate-900 leading-tight line-clamp-1 mt-0.5">
+                          {cand.principalName || (cand.fullName.includes('&') ? cand.fullName.split('&')[0].trim() : cand.fullName)}
+                        </h5>
+                        <p className="text-[10px] font-semibold text-purple-700 mt-0.5">
+                          Grado {cand.principalGrade || cand.grade} ({cand.principalGroup || cand.group})
+                        </p>
+                      </div>
+
+                      {/* Suplente */}
+                      <div className="flex flex-col items-center text-center border-l border-slate-200/80 pl-2">
+                        <div className="relative mb-1.5">
+                          {cand.suplentePhotoUrl ? (
+                            <img
+                              src={cand.suplentePhotoUrl}
+                              alt={cand.suplenteName || 'Suplente'}
+                              className="w-14 h-14 rounded-xl object-cover border-2 border-indigo-300 shadow-2xs"
+                            />
+                          ) : (
+                            <div className="w-14 h-14 rounded-xl bg-indigo-100 border-2 border-indigo-300 flex items-center justify-center text-indigo-700 font-bold text-sm">
+                              {(cand.suplenteName || 'S').charAt(0)}
+                            </div>
+                          )}
+                          <span className="absolute -bottom-1 inset-x-0 mx-auto w-max px-1.5 py-0.2 rounded-full text-[8px] font-black uppercase tracking-wider bg-indigo-700 text-white">
+                            Suplente
+                          </span>
+                        </div>
+                        <h5 className="text-xs font-black text-slate-900 leading-tight line-clamp-1 mt-0.5">
+                          {cand.suplenteName || (cand.fullName.includes('&') ? cand.fullName.split('&')[1].trim() : 'Suplente')}
+                        </h5>
+                        <p className="text-[10px] font-semibold text-indigo-700 mt-0.5">
+                          Grado {cand.suplenteGrade || cand.grade} ({cand.suplenteGroup || cand.group})
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <p className="text-xs text-slate-600 italic bg-slate-50 p-2.5 rounded-xl border border-slate-100 mb-3">
                     "{cand.slogan}"
@@ -460,7 +556,7 @@ export const CandidateManagerTab: React.FC = () => {
                     title="Editar datos de candidatura"
                   >
                     <Pencil className="w-3.5 h-3.5" />
-                    <span>Editar Candidato</span>
+                    <span>Editar Fórmula</span>
                   </button>
 
                   {cand.isBlankVote ? (
@@ -496,8 +592,8 @@ export const CandidateManagerTab: React.FC = () => {
               <thead className="bg-slate-50 text-slate-700 uppercase font-black tracking-wider text-[10px] border-b border-slate-200">
                 <tr>
                   <th className="py-3 px-4"># Tarjetón</th>
-                  <th className="py-3 px-4">Foto</th>
-                  <th className="py-3 px-4">Nombre del Candidato</th>
+                  <th className="py-3 px-4">Fórmula (Fotos)</th>
+                  <th className="py-3 px-4">Candidato Principal y Suplente</th>
                   <th className="py-3 px-4">Cargo Electoral</th>
                   <th className="py-3 px-4">Grado / Grupo</th>
                   <th className="py-3 px-4">Lema de Campaña</th>
@@ -521,19 +617,41 @@ export const CandidateManagerTab: React.FC = () => {
                     </td>
                     <td className="py-3 px-4">
                       {!cand.isBlankVote ? (
-                        <img
-                          src={cand.photoUrl}
-                          alt={cand.fullName}
-                          className="w-9 h-9 rounded-lg object-cover border border-slate-200"
-                        />
+                        <div className="flex items-center -space-x-2">
+                          <img
+                            src={cand.principalPhotoUrl || cand.photoUrl}
+                            alt="Principal"
+                            className="w-9 h-9 rounded-lg object-cover border-2 border-purple-400 z-10"
+                            title={`Principal: ${cand.principalName || cand.fullName}`}
+                          />
+                          <img
+                            src={cand.suplentePhotoUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=320&q=80'}
+                            alt="Suplente"
+                            className="w-9 h-9 rounded-lg object-cover border-2 border-indigo-400"
+                            title={`Suplente: ${cand.suplenteName || 'Suplente'}`}
+                          />
+                        </div>
                       ) : (
                         <div className="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-400">
                           VB
                         </div>
                       )}
                     </td>
-                    <td className="py-3 px-4 font-bold text-slate-900">
-                      {cand.fullName}
+                    <td className="py-3 px-4">
+                      {cand.isBlankVote ? (
+                        <span className="font-bold text-slate-900">Voto en Blanco</span>
+                      ) : (
+                        <div className="space-y-0.5">
+                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                            <span className="text-[9px] font-black uppercase px-1 rounded bg-purple-100 text-purple-800">P</span>
+                            <span>{cand.principalName || (cand.fullName.includes('&') ? cand.fullName.split('&')[0].trim() : cand.fullName)}</span>
+                          </div>
+                          <div className="text-slate-600 flex items-center gap-1.5 text-[11px]">
+                            <span className="text-[9px] font-black uppercase px-1 rounded bg-indigo-100 text-indigo-800">S</span>
+                            <span>{cand.suplenteName || (cand.fullName.includes('&') ? cand.fullName.split('&')[1].trim() : 'Suplente')}</span>
+                          </div>
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-4">
                       <span className="px-2 py-0.5 rounded-md bg-purple-100 text-purple-800 text-[11px] font-semibold">
@@ -541,7 +659,7 @@ export const CandidateManagerTab: React.FC = () => {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-slate-600">
-                      {!cand.isBlankVote ? `${cand.grade} - ${cand.group}` : 'N/A'}
+                      {!cand.isBlankVote ? `${cand.principalGrade || cand.grade} (${cand.principalGroup || cand.group})` : 'N/A'}
                     </td>
                     <td className="py-3 px-4 text-slate-600 italic max-w-xs truncate">
                       "{cand.slogan}"
@@ -643,53 +761,132 @@ export const CandidateManagerTab: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Nombre Completo del Candidato</label>
-                <input
-                  type="text"
-                  value={editFullName}
-                  onChange={e => setEditFullName(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:bg-white"
-                  required
-                />
-              </div>
+              {editingCandidate.isBlankVote ? (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Nombre de la Opción</label>
+                  <input
+                    type="text"
+                    value={editPrincipalName}
+                    onChange={e => setEditPrincipalName(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:bg-white"
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="space-y-4 pt-1">
+                  {/* Candidato Principal */}
+                  <div className="p-3.5 bg-purple-50/50 rounded-xl border border-purple-200/70 space-y-3">
+                    <div className="flex items-center gap-2 text-purple-900 font-bold">
+                      <span className="w-5 h-5 rounded-full bg-purple-700 text-white text-[10px] flex items-center justify-center">1</span>
+                      <span>Candidato Principal</span>
+                    </div>
 
-              {!editingCandidate.isBlankVote && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Grado</label>
-                    <select
-                      value={editGrade}
-                      onChange={e => setEditGrade(e.target.value)}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white"
-                    >
-                      {['11°', '10°', '9°', '8°', '7°', '6°', '5°', '4°', '3°', '2°', '1°'].map(g => (
-                        <option key={g} value={g}>Grado {g}</option>
-                      ))}
-                    </select>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Nombre Completo del Principal</label>
+                      <input
+                        type="text"
+                        value={editPrincipalName}
+                        onChange={e => setEditPrincipalName(e.target.value)}
+                        placeholder="Ej: Daniel Moreno Castro"
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-purple-400"
+                        required
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">Grado Principal</label>
+                        <select
+                          value={editPrincipalGrade}
+                          onChange={e => setEditPrincipalGrade(e.target.value)}
+                          className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-purple-400"
+                        >
+                          {['11°', '10°', '9°', '8°', '7°', '6°', '5°', '4°', '3°', '2°', '1°'].map(g => (
+                            <option key={g} value={g}>Grado {g}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">Grupo Principal</label>
+                        <input
+                          type="text"
+                          value={editPrincipalGroup}
+                          onChange={e => setEditPrincipalGroup(e.target.value)}
+                          placeholder="11-A"
+                          className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-purple-400"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">URL Fotografía Principal</label>
+                      <input
+                        type="url"
+                        value={editPrincipalPhotoUrl}
+                        onChange={e => setEditPrincipalPhotoUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-purple-400"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">Grupo</label>
-                    <input
-                      type="text"
-                      value={editGroup}
-                      onChange={e => setEditGroup(e.target.value)}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white"
-                      required
-                    />
+
+                  {/* Candidato Suplente */}
+                  <div className="p-3.5 bg-indigo-50/50 rounded-xl border border-indigo-200/70 space-y-3">
+                    <div className="flex items-center gap-2 text-indigo-900 font-bold">
+                      <span className="w-5 h-5 rounded-full bg-indigo-700 text-white text-[10px] flex items-center justify-center">2</span>
+                      <span>Candidato Suplente (Fórmula)</span>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Nombre Completo del Suplente</label>
+                      <input
+                        type="text"
+                        value={editSuplenteName}
+                        onChange={e => setEditSuplenteName(e.target.value)}
+                        placeholder="Ej: Mariana Torres Ríos"
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-indigo-400"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">Grado Suplente</label>
+                        <select
+                          value={editSuplenteGrade}
+                          onChange={e => setEditSuplenteGrade(e.target.value)}
+                          className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400"
+                        >
+                          {['11°', '10°', '9°', '8°', '7°', '6°', '5°', '4°', '3°', '2°', '1°'].map(g => (
+                            <option key={g} value={g}>Grado {g}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-700 mb-1">Grupo Suplente</label>
+                        <input
+                          type="text"
+                          value={editSuplenteGroup}
+                          onChange={e => setEditSuplenteGroup(e.target.value)}
+                          placeholder="11-A"
+                          className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">URL Fotografía Suplente</label>
+                      <input
+                        type="url"
+                        value={editSuplentePhotoUrl}
+                        onChange={e => setEditSuplentePhotoUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">URL de Fotografía Oficial</label>
-                <input
-                  type="url"
-                  value={editPhotoUrl}
-                  onChange={e => setEditPhotoUrl(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white"
-                />
-              </div>
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Lema de Campaña</label>
@@ -829,53 +1026,118 @@ export const CandidateManagerTab: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Nombre Completo del Candidato</label>
-                <input
-                  type="text"
-                  value={fullName}
-                  onChange={e => setFullName(e.target.value)}
-                  placeholder="Ej: Daniel Moreno Castro"
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                  required
-                />
-              </div>
+              <div className="space-y-4 pt-1">
+                {/* Candidato Principal */}
+                <div className="p-3.5 bg-purple-50/50 rounded-xl border border-purple-200/70 space-y-3">
+                  <div className="flex items-center gap-2 text-purple-900 font-bold">
+                    <span className="w-5 h-5 rounded-full bg-purple-700 text-white text-[10px] flex items-center justify-center">1</span>
+                    <span>Candidato Principal</span>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Grado</label>
-                  <select
-                    value={grade}
-                    onChange={e => setGrade(e.target.value)}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                  >
-                    {['11°', '10°', '9°', '8°', '7°', '6°', '5°', '4°', '3°', '2°', '1°'].map(g => (
-                      <option key={g} value={g}>Grado {g}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Grupo</label>
-                  <input
-                    type="text"
-                    value={group}
-                    onChange={e => setGroup(e.target.value)}
-                    placeholder="11-A"
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                    required
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Nombre Completo del Principal</label>
+                    <input
+                      type="text"
+                      value={principalName}
+                      onChange={e => setPrincipalName(e.target.value)}
+                      placeholder="Ej: Daniel Moreno Castro"
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-purple-400"
+                      required
+                    />
+                  </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">URL de Fotografía Oficial</label>
-                <input
-                  type="url"
-                  value={photoUrl}
-                  onChange={e => setPhotoUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
-                />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Grado Principal</label>
+                      <select
+                        value={principalGrade}
+                        onChange={e => setPrincipalGrade(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-purple-400"
+                      >
+                        {['11°', '10°', '9°', '8°', '7°', '6°', '5°', '4°', '3°', '2°', '1°'].map(g => (
+                          <option key={g} value={g}>Grado {g}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Grupo Principal</label>
+                      <input
+                        type="text"
+                        value={principalGroup}
+                        onChange={e => setPrincipalGroup(e.target.value)}
+                        placeholder="11-A"
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-purple-400"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">URL Fotografía Principal</label>
+                    <input
+                      type="url"
+                      value={principalPhotoUrl}
+                      onChange={e => setPrincipalPhotoUrl(e.target.value)}
+                      placeholder="https://..."
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-purple-400"
+                    />
+                  </div>
+                </div>
+
+                {/* Candidato Suplente */}
+                <div className="p-3.5 bg-indigo-50/50 rounded-xl border border-indigo-200/70 space-y-3">
+                  <div className="flex items-center gap-2 text-indigo-900 font-bold">
+                    <span className="w-5 h-5 rounded-full bg-indigo-700 text-white text-[10px] flex items-center justify-center">2</span>
+                    <span>Candidato Suplente (Fórmula)</span>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Nombre Completo del Suplente</label>
+                    <input
+                      type="text"
+                      value={suplenteName}
+                      onChange={e => setSuplenteName(e.target.value)}
+                      placeholder="Ej: Mariana Torres Ríos"
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-medium focus:border-indigo-400"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Grado Suplente</label>
+                      <select
+                        value={suplenteGrade}
+                        onChange={e => setSuplenteGrade(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400"
+                      >
+                        {['11°', '10°', '9°', '8°', '7°', '6°', '5°', '4°', '3°', '2°', '1°'].map(g => (
+                          <option key={g} value={g}>Grado {g}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Grupo Suplente</label>
+                      <input
+                        type="text"
+                        value={suplenteGroup}
+                        onChange={e => setSuplenteGroup(e.target.value)}
+                        placeholder="11-A"
+                        className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">URL Fotografía Suplente</label>
+                    <input
+                      type="url"
+                      value={suplentePhotoUrl}
+                      onChange={e => setSuplentePhotoUrl(e.target.value)}
+                      placeholder="https://..."
+                      className="w-full p-2.5 bg-white border border-slate-200 rounded-xl focus:border-indigo-400"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div>

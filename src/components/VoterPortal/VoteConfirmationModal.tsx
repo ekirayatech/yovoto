@@ -81,14 +81,19 @@ export const VoteConfirmationModal: React.FC<VoteConfirmationModalProps> = ({
 
               if (!candidate) return null;
 
+              const principalName = candidate.principalName || candidate.fullName;
+              const principalPhoto = candidate.principalPhotoUrl || candidate.photoUrl;
+              const suplenteName = candidate.suplenteName || (candidate.fullName.includes('&') ? candidate.fullName.split('&')[1].trim() : 'Suplente Inscrito');
+              const suplentePhoto = candidate.suplentePhotoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80';
+
               return (
                 <div
                   key={pos.id}
-                  className="p-4 rounded-2xl border border-slate-200 bg-slate-50 flex items-center justify-between gap-3"
+                  className="p-4 rounded-2xl border border-slate-200 bg-slate-50/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
                     <div
-                      className="w-12 h-12 rounded-xl flex items-center justify-center font-black text-base border shrink-0"
+                      className="w-12 h-12 rounded-xl flex items-center justify-center font-black text-base border shrink-0 mt-0.5"
                       style={{
                         backgroundColor: candidate.isBlankVote ? '#f1f5f9' : `${candidate.colorHex}20`,
                         color: candidate.isBlankVote ? '#475569' : candidate.colorHex,
@@ -97,22 +102,75 @@ export const VoteConfirmationModal: React.FC<VoteConfirmationModalProps> = ({
                     >
                       {candidate.number}
                     </div>
-                    <div>
-                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-purple-700">
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-purple-700 block">
                         {pos.shortTitle}
                       </span>
-                      <h4 className="text-sm font-black text-slate-900 leading-tight">
-                        {candidate.fullName}
-                      </h4>
-                      <p className="text-xs text-slate-500">
-                        {candidate.isBlankVote ? 'Voto en Blanco Institucional' : `Grado ${candidate.grade} • Grupo ${candidate.group}`}
-                      </p>
+                      
+                      {candidate.isBlankVote ? (
+                        <div>
+                          <h4 className="text-sm font-black text-slate-900 leading-tight">
+                            Voto en Blanco
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Opción Constitucional Institucional
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="mt-1 space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            {principalPhoto ? (
+                              <img
+                                src={principalPhoto}
+                                alt={principalName}
+                                referrerPolicy="no-referrer"
+                                className="w-8 h-8 rounded-lg object-cover border border-purple-300 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-lg bg-purple-100 border border-purple-300 flex items-center justify-center text-purple-700 font-bold text-xs shrink-0">
+                                {principalName.charAt(0)}
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <span className="text-[9px] font-black uppercase tracking-wide text-purple-700 block leading-none">
+                                Principal
+                              </span>
+                              <span className="text-xs font-bold text-slate-900 truncate block">
+                                {principalName} ({candidate.principalGrade || candidate.grade})
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {suplentePhoto ? (
+                              <img
+                                src={suplentePhoto}
+                                alt={suplenteName}
+                                referrerPolicy="no-referrer"
+                                className="w-8 h-8 rounded-lg object-cover border border-indigo-300 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-lg bg-indigo-100 border border-indigo-300 flex items-center justify-center text-indigo-700 font-bold text-xs shrink-0">
+                                {suplenteName.charAt(0)}
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <span className="text-[9px] font-black uppercase tracking-wide text-indigo-700 block leading-none">
+                                Suplente
+                              </span>
+                              <span className="text-xs font-bold text-slate-900 truncate block">
+                                {suplenteName} ({candidate.suplenteGrade || candidate.grade})
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100/70 px-3 py-1 rounded-full shrink-0">
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100/70 px-3 py-1.5 rounded-full shrink-0 self-start sm:self-center">
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    Marcado
+                    Fórmula Marcada
                   </span>
                 </div>
               );

@@ -206,6 +206,39 @@ const INITIAL_LOGS: AuditLog[] = [
   }
 ];
 
+export const ensureFormulaCandidate = (cand: Candidate): Candidate => {
+  if (cand.isBlankVote) {
+    return {
+      ...cand,
+      principalName: cand.principalName || 'Voto en Blanco',
+      suplenteName: '',
+      principalPhotoUrl: '',
+      suplentePhotoUrl: '',
+    };
+  }
+
+  const principalName = cand.principalName || (cand.fullName.includes('&') ? cand.fullName.split('&')[0].trim() : cand.fullName);
+  const suplenteName = cand.suplenteName || (cand.fullName.includes('&') ? cand.fullName.split('&')[1].trim() : (cand.fullName.includes(' y ') ? cand.fullName.split(' y ')[1].trim() : 'Suplente de Fórmula'));
+  const principalPhotoUrl = cand.principalPhotoUrl || cand.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80';
+  const suplentePhotoUrl = cand.suplentePhotoUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=320&q=80';
+  const principalGrade = cand.principalGrade || cand.grade || '11°';
+  const principalGroup = cand.principalGroup || cand.group || '11-A';
+  const suplenteGrade = cand.suplenteGrade || cand.grade || '11°';
+  const suplenteGroup = cand.suplenteGroup || cand.group || '11-A';
+
+  return {
+    ...cand,
+    principalName,
+    principalPhotoUrl,
+    principalGrade,
+    principalGroup,
+    suplenteName,
+    suplentePhotoUrl,
+    suplenteGrade,
+    suplenteGroup,
+  };
+};
+
 export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [config, setConfig] = useState<ElectionConfig>(() => {
     try {
@@ -228,9 +261,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [candidates, setCandidates] = useState<Candidate[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CANDIDATES);
-      return saved ? JSON.parse(saved) : INITIAL_CANDIDATES;
+      const parsed = saved ? JSON.parse(saved) : INITIAL_CANDIDATES;
+      return Array.isArray(parsed) ? parsed.map(ensureFormulaCandidate) : INITIAL_CANDIDATES.map(ensureFormulaCandidate);
     } catch {
-      return INITIAL_CANDIDATES;
+      return INITIAL_CANDIDATES.map(ensureFormulaCandidate);
     }
   });
 
@@ -1358,6 +1392,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         let photoUrl = '';
         let proposals: string[] = [];
         let isBlankVote = false;
+        let suplenteName = '';
+        let suplentePhotoUrl = '';
 
         for (const tc of textCells) {
           const v = tc.val;
@@ -1368,12 +1404,16 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           else if (vl.includes('curso') || vl.includes('representante')) posId = 'representante_curso';
           else if (vl.includes('cabild')) posId = 'cabildante';
           else if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) colorHex = v;
-          else if (/^https?:\/\//i.test(v)) photoUrl = v;
+          else if (/^https?:\/\//i.test(v)) {
+            if (!photoUrl) photoUrl = v;
+            else if (!suplentePhotoUrl) suplentePhotoUrl = v;
+          }
           else if (/^0*(\d{1,2})$/.test(v) && !numberStr) numberStr = v;
           else if (/^(1[0-2]|[0-9])°?(-?[a-zA-Z])?$/.test(v) && grade === '11°') grade = v;
           else if (vl.includes('blanco')) isBlankVote = true;
           else if (v.includes(';') && proposals.length === 0) proposals = v.split(';').map(p => p.trim()).filter(Boolean);
           else if (!fullName && v.length >= 3 && !/^\d+$/.test(v)) fullName = v;
+          else if (fullName && !suplenteName && v.length >= 3 && !/^\d+$/.test(v) && v !== slogan) suplenteName = v;
           else if (!slogan && v.length >= 3) slogan = v;
         }
 
@@ -1381,11 +1421,19 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (!numberStr) numberStr = String(idx + 1).padStart(2, '0');
         if (fullName.toLowerCase().includes('blanco')) isBlankVote = true;
 
-        return {
+        return ensureFormulaCandidate({
           id: `cand-sheet-${idx + 1}`,
           positionId: posId,
           number: numberStr.padStart(2, '0'),
           fullName,
+          principalName: fullName,
+          principalPhotoUrl: photoUrl,
+          principalGrade: grade,
+          principalGroup: group,
+          suplenteName,
+          suplentePhotoUrl,
+          suplenteGrade: grade,
+          suplenteGroup: group,
           grade,
           group,
           slogan: slogan || 'Liderazgo, compromiso y transparencia',
@@ -1393,7 +1441,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           colorHex: isBlankVote ? '#64748b' : colorHex,
           photoUrl: photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces',
           isBlankVote
-        };
+        });
       }
 
       const id = item.id || `cand-sheet-${idx + 1}`;
@@ -1408,20 +1456,32 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const rawNum = item.number !== undefined ? item.number : (item.numero || item.tarjeton || idx + 1);
       const number = String(rawNum).padStart(2, '0');
       const fullName = item.fullName || item.nombre || item.Nombre || item.nombreCompleto || item.candidato || `Candidato #${number}`;
+      const principalName = item.principalName || item.candidatoPrincipal || item.nombrePrincipal || item.principal || fullName;
+      const principalPhotoUrl = item.principalPhotoUrl || item.fotoPrincipal || item.foto || item.photoUrl || '';
+      const suplenteName = item.suplenteName || item.candidatoSuplente || item.nombreSuplente || item.suplente || '';
+      const suplentePhotoUrl = item.suplentePhotoUrl || item.fotoSuplente || item.suplenteFoto || '';
       const grade = item.grade || item.grado || item.Grado || '11°';
       const group = item.group || item.grupo || item.Grupo || '11-A';
       const slogan = item.slogan || item.lema || item.Lema || 'Liderazgo, compromiso y transparencia';
       const colorHex = item.colorHex || item.color || item.Color || '#7e22ce';
-      const photoUrl = item.photoUrl || item.foto || item.Foto || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces';
+      const photoUrl = item.photoUrl || item.foto || item.Foto || principalPhotoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces';
       const rawProps = item.proposals || item.propuestas || item.Propuestas || [];
       const proposals = Array.isArray(rawProps) ? rawProps : (typeof rawProps === 'string' ? rawProps.split(';').map(p => p.trim()).filter(Boolean) : []);
       const isBlankVote = Boolean(item.isBlankVote || item.votoEnBlanco || item.blanco || fullName.toLowerCase().includes('blanco'));
 
-      return {
+      return ensureFormulaCandidate({
         id,
         positionId: posId,
         number,
         fullName,
+        principalName,
+        principalPhotoUrl,
+        principalGrade: item.principalGrade || grade,
+        principalGroup: item.principalGroup || group,
+        suplenteName,
+        suplentePhotoUrl,
+        suplenteGrade: item.suplenteGrade || grade,
+        suplenteGroup: item.suplenteGroup || group,
         grade,
         group,
         slogan,
@@ -1429,7 +1489,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         colorHex: isBlankVote ? '#64748b' : colorHex,
         photoUrl,
         isBlankVote
-      };
+      });
     });
   };
 

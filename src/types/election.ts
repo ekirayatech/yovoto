@@ -14,7 +14,15 @@ export interface Candidate {
   id: string;
   number: string; // Número en el tarjetón, e.g. "01", "02"
   positionId: string;
-  fullName: string;
+  fullName: string; // Nombre representativo o de la fórmula (Candidato Principal)
+  principalName?: string; // Nombre del Candidato Principal
+  principalPhotoUrl?: string; // Foto del Candidato Principal
+  principalGrade?: string; // Grado del Candidato Principal
+  principalGroup?: string; // Grupo del Candidato Principal
+  suplenteName?: string; // Nombre del Candidato Suplente
+  suplentePhotoUrl?: string; // Foto del Candidato Suplente
+  suplenteGrade?: string; // Grado del Candidato Suplente
+  suplenteGroup?: string; // Grupo del Candidato Suplente
   grade: string;
   group: string;
   photoUrl: string;
