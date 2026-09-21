@@ -109,9 +109,13 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
           
           {/* Institution Logo & Title */}
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-xl bg-linear-to-br from-purple-800 to-indigo-950 text-white flex flex-col items-center justify-center font-black shadow-md border-2 border-white ring-2 ring-purple-500/30 shrink-0">
-              <span className="text-xs font-black tracking-widest text-purple-200">EKI</span>
-              <span className="text-[9px] font-extrabold text-white tracking-tight -mt-1">RAYÁ</span>
+            <div className="h-12 w-auto max-w-[170px] bg-white rounded-xl p-1 shadow-xs border border-slate-200/80 flex items-center justify-center shrink-0">
+              <img
+                src={config.logoUrl || 'https://colegioekiraya.edu.co/wp-content/uploads/2024/09/LOGO-CEM-COLOR-02.png'}
+                alt="Colegio Ekirayá - CEM"
+                className="h-10 w-auto object-contain max-w-[150px]"
+                referrerPolicy="no-referrer"
+              />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">

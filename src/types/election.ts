@@ -76,6 +76,7 @@ export interface VotingCertificate {
   timestamp: string;
   verificationHash: string;
   schoolName: string;
+  schoolLogo?: string;
   daneCode: string;
   rectorName: string;
 }
@@ -113,6 +114,7 @@ export interface PollingStation {
 
 export interface ElectionConfig {
   institutionName: string;
+  logoUrl?: string;
   daneCode: string;
   nit: string;
   city: string;

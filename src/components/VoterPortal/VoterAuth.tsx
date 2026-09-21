@@ -102,9 +102,14 @@ export const VoterAuth: React.FC = () => {
       <div className="bg-linear-to-br from-purple-900 via-purple-800 to-indigo-950 text-white rounded-2xl p-6 shadow-xl mb-6 relative overflow-hidden border border-purple-700/30">
         <div className="absolute -right-6 -bottom-6 w-32 h-32 bg-purple-600/30 rounded-full blur-xl pointer-events-none" />
         
-        <div className="flex items-center gap-3 mb-2">
-          <div className="w-9 h-9 rounded-xl bg-white text-purple-900 shadow-sm flex items-center justify-center font-bold">
-            <Fingerprint className="w-5 h-5" />
+        <div className="flex items-center gap-3.5 mb-2.5">
+          <div className="bg-white rounded-xl p-1.5 shadow-sm border border-white/20 flex items-center justify-center shrink-0">
+            <img
+              src={config.logoUrl || 'https://colegioekiraya.edu.co/wp-content/uploads/2024/09/LOGO-CEM-COLOR-02.png'}
+              alt="Colegio Ekirayá - CEM"
+              className="h-9 w-auto object-contain max-w-[130px]"
+              referrerPolicy="no-referrer"
+            />
           </div>
           <div>
             <span className="text-xs font-bold text-purple-200 tracking-wider uppercase">
@@ -115,7 +120,7 @@ export const VoterAuth: React.FC = () => {
         </div>
 
         <p className="text-xs text-purple-100/90 leading-relaxed mt-1">
-          Ingrese su documento de identidad registrado en el censo del <strong>Colegio Bilingüe Ekirayá</strong>. El sistema verificará su habilitación en mesa y garantizará el <strong>secreto constitucional e inviolabilidad</strong> de su sufragio.
+          Ingrese su documento de identidad registrado en el censo oficial del <strong>{config.institutionName}</strong>. El sistema verificará su habilitación en mesa y garantizará el <strong>secreto constitucional e inviolabilidad</strong> de su sufragio.
         </p>
 
         <div className="mt-4 pt-3 border-t border-purple-700/60 flex items-center justify-between text-[11px] text-purple-200">

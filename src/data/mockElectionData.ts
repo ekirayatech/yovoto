@@ -1234,7 +1234,8 @@ export const INITIAL_STUDENTS: Student[] = [
 ];
 
 export const INITIAL_CONFIG: ElectionConfig = {
-  institutionName: 'Colegio Bilingüe Ekirayá',
+  institutionName: 'Colegio Ekirayá - CEM',
+  logoUrl: 'https://colegioekiraya.edu.co/wp-content/uploads/2024/09/LOGO-CEM-COLOR-02.png',
   daneCode: '311001859214',
   nit: '900.412.875-1',
   city: 'La Calera / Bogotá D.C.',

@@ -77,8 +77,18 @@ export const JuradoLoginForm: React.FC<JuradoLoginFormProps> = ({ onCancel }) =>
             </span>
           </div>
 
-          <div className="w-12 h-12 rounded-2xl bg-emerald-600/30 border border-emerald-400/30 flex items-center justify-center text-emerald-300 mb-3 shadow-inner">
-            <UserCheck className="w-6 h-6" />
+          <div className="flex items-center gap-3 mb-4">
+            <div className="bg-white rounded-xl p-1.5 shadow-xs border border-white/20 inline-flex items-center justify-center">
+              <img
+                src={config.logoUrl || 'https://colegioekiraya.edu.co/wp-content/uploads/2024/09/LOGO-CEM-COLOR-02.png'}
+                alt="Colegio Ekirayá - CEM"
+                className="h-10 w-auto object-contain"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-emerald-600/30 border border-emerald-400/30 flex items-center justify-center text-emerald-300 shadow-inner">
+              <UserCheck className="w-5 h-5" />
+            </div>
           </div>
 
           <h2 className="text-xl font-black tracking-tight text-white">

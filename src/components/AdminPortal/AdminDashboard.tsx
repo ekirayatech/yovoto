@@ -16,6 +16,7 @@ import {
   Scale,
   Settings,
   ShieldCheck,
+  UploadCloud,
   UserCheck,
   Users
 } from 'lucide-react';
@@ -30,12 +31,14 @@ import { IntegrationsTab } from './IntegrationsTab';
 import { JuradosManagerTab } from './JuradosManagerTab';
 import { LiveResultsTab } from './LiveResultsTab';
 import { OfficialActasTab } from './OfficialActasTab';
+import { UnifiedSheetsImportModal } from './UnifiedSheetsImportModal';
 
 type AdminTab = 'results' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'integrations';
 
 export const AdminDashboard: React.FC = () => {
   const { config, updateElectionStatus, resetElectionData, students, votes } = useElection();
   const [currentTab, setCurrentTab] = useState<AdminTab>('results');
+  const [isSheetsImportOpen, setIsSheetsImportOpen] = useState<boolean>(false);
 
   const handleStatusChange = (newStatus: ElectionStatus) => {
     if (newStatus === 'CERRADA' && !confirm('¿Está seguro de cerrar las urnas? Los estudiantes ya no podrán emitir más votos.')) {
@@ -118,6 +121,15 @@ export const AdminDashboard: React.FC = () => {
             )}
 
             <button
+              onClick={() => setIsSheetsImportOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-purple-700 hover:bg-purple-800 active:scale-95 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+              title="Importar candidatos, jurados, administradores y votantes desde Google Sheets"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-purple-200" />
+              <span>Importar desde Sheets</span>
+            </button>
+
+            <button
               onClick={handleReset}
               className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-bold border border-red-200 transition-colors"
               title="Restablecer censo y urnas a cero"
@@ -171,6 +183,12 @@ export const AdminDashboard: React.FC = () => {
       {currentTab === 'admins' && <AdminsManagerTab />}
       {currentTab === 'audit' && <AuditLogsTab />}
       {currentTab === 'integrations' && <IntegrationsTab />}
+
+      {/* Unified Sheets Import Hub Modal */}
+      <UnifiedSheetsImportModal
+        isOpen={isSheetsImportOpen}
+        onClose={() => setIsSheetsImportOpen(false)}
+      />
     </div>
   );
 };

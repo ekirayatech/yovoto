@@ -46,6 +46,7 @@ import {
   writeVotersToSheets,
   writeVoteToSheets
 } from '../../utils/googleSheetsService';
+import { UnifiedSheetsImportModal } from './UnifiedSheetsImportModal';
 
 export const IntegrationsTab: React.FC = () => {
   const {
@@ -62,6 +63,7 @@ export const IntegrationsTab: React.FC = () => {
   } = useElection();
 
   const [activeSubTab, setActiveSubTab] = useState<'sheets' | 'github' | 'vercel' | 'supabase'>('sheets');
+  const [isUnifiedModalOpen, setIsUnifiedModalOpen] = useState<boolean>(false);
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncSuccessMsg, setSyncSuccessMsg] = useState<string | null>(null);
@@ -999,15 +1001,24 @@ function respondJSON(obj) {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 w-full lg:w-auto">
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setIsUnifiedModalOpen(true)}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors shrink-0 cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-purple-200" />
+                  <span>⚡ Abrir Importador de 4 Bases</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={handleSyncNow}
                   disabled={isSyncing}
-                  className="w-full lg:w-auto px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors disabled:opacity-50 shrink-0"
+                  className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors disabled:opacity-50 shrink-0"
                 >
                   <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar Todo con Sheets'}</span>
+                  <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar Todo'}</span>
                 </button>
               </div>
             </div>
@@ -2002,6 +2013,12 @@ git push -u origin main`}
           </div>
         </div>
       )}
+
+      {/* Unified Import Hub Modal */}
+      <UnifiedSheetsImportModal
+        isOpen={isUnifiedModalOpen}
+        onClose={() => setIsUnifiedModalOpen(false)}
+      />
 
     </div>
   );

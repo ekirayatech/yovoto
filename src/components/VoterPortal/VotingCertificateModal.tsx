@@ -27,7 +27,7 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
   certificate,
   onClose
 }) => {
-  const { sendCertificateByEmail } = useElection();
+  const { sendCertificateByEmail, config } = useElection();
   const [recipientEmail, setRecipientEmail] = useState<string>(
     certificate.studentEmail || 'estudiante@ekiraya.edu.co'
   );
@@ -150,9 +150,13 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
 
             {/* Institution & Title */}
             <div className="text-center pt-2 pb-4 border-b border-slate-200">
-              <div className="w-12 h-12 mx-auto mb-2 rounded-xl bg-purple-900 text-white flex flex-col items-center justify-center font-black shadow-xs">
-                <span className="text-[11px] font-black tracking-widest text-purple-200">EKI</span>
-                <span className="text-[9px] font-extrabold text-white tracking-tight -mt-1">RAYÁ</span>
+              <div className="h-14 mx-auto mb-2 flex items-center justify-center">
+                <img
+                  src={certificate.schoolLogo || config.logoUrl || 'https://colegioekiraya.edu.co/wp-content/uploads/2024/09/LOGO-CEM-COLOR-02.png'}
+                  alt="Colegio Ekirayá - CEM"
+                  className="h-12 w-auto object-contain max-w-[180px]"
+                  referrerPolicy="no-referrer"
+                />
               </div>
               <h2 className="text-base sm:text-lg font-black text-slate-900 uppercase tracking-tight">
                 {certificate.schoolName}

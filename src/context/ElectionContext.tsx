@@ -1348,7 +1348,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const textCells = item
           .map((val, c) => ({ col: c, val: String(val !== null && val !== undefined ? val : '').trim() }))
           .filter(tc => tc.val !== '');
-        let posId = 'personero';
+        let posId = 'personeria';
         let fullName = '';
         let numberStr = '';
         let grade = '11°';
@@ -1362,11 +1362,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         for (const tc of textCells) {
           const v = tc.val;
           const vl = v.toLowerCase();
-          if (vl.includes('personer')) posId = 'personero';
-          else if (vl.includes('contralor')) posId = 'contralor';
+          if (vl.includes('personer')) posId = 'personeria';
+          else if (vl.includes('contralor')) posId = 'contraloria';
+          else if (vl.includes('directiv') || vl.includes('consejo')) posId = 'consejo_directivo';
+          else if (vl.includes('curso') || vl.includes('representante')) posId = 'representante_curso';
           else if (vl.includes('cabild')) posId = 'cabildante';
-          else if (vl.includes('consejo')) posId = 'consejo';
-          else if (vl.includes('representante')) posId = 'representante';
           else if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) colorHex = v;
           else if (/^https?:\/\//i.test(v)) photoUrl = v;
           else if (/^0*(\d{1,2})$/.test(v) && !numberStr) numberStr = v;
@@ -1397,11 +1397,13 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       const id = item.id || `cand-sheet-${idx + 1}`;
-      let posId = String(item.positionId || item.cargo || item.Cargo || item.posicion || 'personero').toLowerCase();
-      if (posId.includes('contralor')) posId = 'contralor';
-      else if (posId.includes('cabild')) posId = 'cabildante';
-      else if (posId.includes('consejo')) posId = 'consejo';
-      else posId = 'personero';
+      let rawPos = String(item.positionId || item.cargo || item.Cargo || item.posicion || 'personeria').toLowerCase();
+      let posId = 'personeria';
+      if (rawPos.includes('contralor')) posId = 'contraloria';
+      else if (rawPos.includes('directiv') || rawPos.includes('consejo')) posId = 'consejo_directivo';
+      else if (rawPos.includes('curso') || rawPos.includes('representante')) posId = 'representante_curso';
+      else if (rawPos.includes('cabild')) posId = 'cabildante';
+      else posId = 'personeria';
 
       const rawNum = item.number !== undefined ? item.number : (item.numero || item.tarjeton || idx + 1);
       const number = String(rawNum).padStart(2, '0');
@@ -1514,26 +1516,118 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       if (table === 'all') {
-        const res = await readAllFromSheets(scriptUrl);
-        if (res.success && res.data) {
-          if (res.data.students?.length) setStudents(res.data.students);
-          if (res.data.candidates?.length) setCandidates(normalizeRawCandidates(res.data.candidates));
-          if (res.data.jurados?.length) setJurados(normalizeRawJurados(res.data.jurados));
-          if (res.data.admins?.length) setAdmins(normalizeRawAdmins(res.data.admins));
+        let finalData: any = {};
+        let counts = { voters: 0, candidates: 0, jurados: 0, admins: 0 };
+        let hasData = false;
+
+        try {
+          const res = await readAllFromSheets(scriptUrl);
+          if (res.success && res.data && (res.data.students || res.data.candidates || res.data.jurados || res.data.admins)) {
+            finalData = res.data;
+            hasData = true;
+          }
+        } catch {
+          // Continue to individual fallback
+        }
+
+        // Si getAllData no trajo todas las tablas o falló, consultar en paralelo cada una
+        if (!hasData || (!finalData.students && !finalData.candidates && !finalData.jurados && !finalData.admins)) {
+          const [votersRes, candRes, jurRes, admRes] = await Promise.allSettled([
+            readCensusFromSheets(scriptUrl),
+            readCandidatesFromSheets(scriptUrl),
+            readJuradosFromSheets(scriptUrl),
+            readAdminsFromSheets(scriptUrl)
+          ]);
+
+          if (votersRes.status === 'fulfilled' && votersRes.value.success && votersRes.value.data) {
+            finalData.students = votersRes.value.data.students || (Array.isArray(votersRes.value.data) ? votersRes.value.data : []);
+          }
+          if (candRes.status === 'fulfilled' && candRes.value.success && candRes.value.data) {
+            finalData.candidates = candRes.value.data.candidates || (Array.isArray(candRes.value.data) ? candRes.value.data : []);
+          }
+          if (jurRes.status === 'fulfilled' && jurRes.value.success && jurRes.value.data) {
+            finalData.jurados = jurRes.value.data.jurados || (Array.isArray(jurRes.value.data) ? jurRes.value.data : []);
+          }
+          if (admRes.status === 'fulfilled' && admRes.value.success && admRes.value.data) {
+            finalData.admins = admRes.value.data.admins || (Array.isArray(admRes.value.data) ? admRes.value.data : []);
+          }
+        }
+
+        let anyUpdated = false;
+
+        if (finalData.students && finalData.students.length > 0) {
+          const rawStudents = finalData.students;
+          const mappedStudents: Student[] = rawStudents.map((s: any, idx: number) => ({
+            id: s.id || `est-sheet-${idx + 1}`,
+            documentType: s.documentType || 'TI',
+            documentNumber: String(s.documentNumber),
+            fullName: s.fullName,
+            grade: s.grade,
+            group: s.group,
+            mesaNumber: Number(s.mesaNumber) || 1,
+            email: s.email || '',
+            hasVoted: Boolean(s.hasVoted),
+            votedAt: s.votedAt,
+            receiptFolio: s.receiptFolio,
+            isVerifiedByJurado: Boolean(s.hasVoted)
+          }));
+          setStudents(mappedStudents);
+          counts.voters = mappedStudents.length;
+          anyUpdated = true;
+        }
+
+        if (finalData.candidates && finalData.candidates.length > 0) {
+          const normCands = normalizeRawCandidates(finalData.candidates);
+          setCandidates(normCands);
+          counts.candidates = normCands.length;
+          anyUpdated = true;
+        }
+
+        if (finalData.jurados && finalData.jurados.length > 0) {
+          const normJur = normalizeRawJurados(finalData.jurados);
+          setJurados(normJur);
+          counts.jurados = normJur.length;
+          anyUpdated = true;
+        }
+
+        if (finalData.admins && finalData.admins.length > 0) {
+          const normAdm = normalizeRawAdmins(finalData.admins);
+          setAdmins(normAdm);
+          counts.admins = normAdm.length;
+          anyUpdated = true;
+        }
+
+        if (anyUpdated) {
           fetch('/api/election/sync-all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              students: res.data.students || [],
-              candidates: res.data.candidates ? normalizeRawCandidates(res.data.candidates) : [],
-              jurados: res.data.jurados ? normalizeRawJurados(res.data.jurados) : [],
-              admins: res.data.admins ? normalizeRawAdmins(res.data.admins) : []
+              students: finalData.students || [],
+              candidates: finalData.candidates ? normalizeRawCandidates(finalData.candidates) : [],
+              jurados: finalData.jurados ? normalizeRawJurados(finalData.jurados) : [],
+              admins: finalData.admins ? normalizeRawAdmins(finalData.admins) : []
             })
           }).catch(() => {});
-          addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', 'Sincronización completa de las 4 bases de datos leídas desde Google Sheets.');
-          return { success: true, message: 'Las 4 bases de datos fueron leídas y cargadas con éxito.', data: res.data };
+          
+          addAuditLog(
+            'SYNC_SHEETS',
+            'ADMIN',
+            'Google Sheets Conector',
+            `Sincronización integral: ${counts.voters} votantes, ${counts.candidates} candidatos, ${counts.jurados} jurados, ${counts.admins} admins cargados.`
+          );
+
+          return {
+            success: true,
+            message: `Importación completada: ${counts.voters} votantes, ${counts.candidates} candidatos, ${counts.jurados} jurados y ${counts.admins} administradores cargados.`,
+            data: finalData,
+            count: counts.voters + counts.candidates + counts.jurados + counts.admins
+          };
         }
-        return res;
+
+        return {
+          success: false,
+          message: 'No se encontraron datos en Google Sheets. Verifique que las hojas se llamen "Votantes", "Candidatos", "Jurados" y "Administradores".'
+        };
       }
 
       return { success: false, message: 'Tabla desconocida' };

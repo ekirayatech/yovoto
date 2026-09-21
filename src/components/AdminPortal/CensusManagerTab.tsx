@@ -3,6 +3,7 @@ import {
   Check,
   CheckCircle,
   Download,
+  FileSpreadsheet,
   Filter,
   MapPin,
   Plus,
@@ -18,6 +19,7 @@ import { useElection } from '../../context/ElectionContext';
 import { ALL_GRADES, getStationForGrade, getStationForMesa, POLLING_STATIONS } from '../../data/mockElectionData';
 import { DocumentType, Student } from '../../types/election';
 import { exportToCSV } from '../../utils/pdfGenerator';
+import { UnifiedSheetsImportModal } from './UnifiedSheetsImportModal';
 
 export const CensusManagerTab: React.FC = () => {
   const { students, addStudent, config } = useElection();
@@ -25,6 +27,7 @@ export const CensusManagerTab: React.FC = () => {
   const [selectedGrade, setSelectedGrade] = useState<string>('all');
   const [selectedMesa, setSelectedMesa] = useState<string>('all');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [isSheetsModalOpen, setIsSheetsModalOpen] = useState<boolean>(false);
 
   // New Student Form State
   const [docType, setDocType] = useState<DocumentType>('TI');
@@ -116,6 +119,14 @@ export const CensusManagerTab: React.FC = () => {
           >
             <UserPlus className="w-4 h-4" />
             <span>Agregar Estudiante</span>
+          </button>
+
+          <button
+            onClick={() => setIsSheetsModalOpen(true)}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
+            <span>Importar de Sheets</span>
           </button>
 
           <button
@@ -356,6 +367,13 @@ export const CensusManagerTab: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Sheets Import Hub */}
+      <UnifiedSheetsImportModal
+        isOpen={isSheetsModalOpen}
+        onClose={() => setIsSheetsModalOpen(false)}
+        defaultTable="voters"
+      />
     </div>
   );
 };
