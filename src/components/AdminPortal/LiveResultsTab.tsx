@@ -20,12 +20,18 @@ import React, { useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
 import { ALL_GRADES, getStationForMesa, POLLING_STATIONS } from '../../data/mockElectionData';
 import { Candidate, Position } from '../../types/election';
-import { exportToCSV, generateActaGeneralE24PDF } from '../../utils/pdfGenerator';
+import { exportToCSV, generateActaGeneralE24PDF, generateResultsReportWithChartsPDF } from '../../utils/pdfGenerator';
 
 export const LiveResultsTab: React.FC = () => {
-  const { config, positions, candidates, students, votes } = useElection();
+  const { config, positions, candidates, students, votes, recordResultsToSheets, sheetsSyncInfo } = useElection();
   const [selectedPositionId, setSelectedPositionId] = useState<string>(positions[0]?.id || 'personeria');
   const [selectedGradeFilter, setSelectedGradeFilter] = useState<string>('TODOS');
+  const [isRecordingSheets, setIsRecordingSheets] = useState(false);
+  const [sheetsRecordFeedback, setSheetsRecordFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+    timestamp?: string;
+  } | null>(null);
 
   const totalCenso = students.length;
   const totalVotaron = students.filter(s => s.hasVoted).length;
@@ -83,9 +89,80 @@ export const LiveResultsTab: React.FC = () => {
     generateActaGeneralE24PDF(config, candidates, positions, votes, students);
   };
 
+  const handleDownloadResultsWithChartsPDF = () => {
+    generateResultsReportWithChartsPDF(config, candidates, positions, votes, students);
+  };
+
+  const handleRecordResultsInSheets = async () => {
+    setIsRecordingSheets(true);
+    setSheetsRecordFeedback(null);
+    try {
+      const res = await recordResultsToSheets();
+      if (res.success) {
+        setSheetsRecordFeedback({
+          type: 'success',
+          message: res.message || 'Resultados consolidados registrados exitosamente en Google Sheets.',
+          timestamp: new Date().toLocaleTimeString('es-CO')
+        });
+      } else {
+        setSheetsRecordFeedback({
+          type: 'error',
+          message: res.message || 'Error al registrar resultados en Google Sheets.'
+        });
+      }
+    } catch (err: any) {
+      setSheetsRecordFeedback({
+        type: 'error',
+        message: err.message || 'Error inesperado al conectar con Google Sheets.'
+      });
+    } finally {
+      setIsRecordingSheets(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       
+      {/* Sheets Sync Feedback Banner */}
+      {sheetsRecordFeedback && (
+        <div
+          className={`p-4 rounded-2xl border flex items-start justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-300 ${
+            sheetsRecordFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+              : 'bg-rose-50 border-rose-200 text-rose-950'
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            {sheetsRecordFeedback.type === 'success' ? (
+              <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            )}
+            <div>
+              <p className="text-sm font-bold">
+                {sheetsRecordFeedback.type === 'success'
+                  ? '¡Resultados Registrados en Google Sheets!'
+                  : 'Fallo al Registrar en Google Sheets'}
+              </p>
+              <p className="text-xs opacity-90 mt-0.5">
+                {sheetsRecordFeedback.message}
+              </p>
+              {sheetsRecordFeedback.timestamp && (
+                <p className="text-[11px] font-mono opacity-70 mt-1">
+                  Hora de registro: {sheetsRecordFeedback.timestamp} • Pestaña: Resultados_Electorales
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => setSheetsRecordFeedback(null)}
+            className="text-xs font-semibold px-2 py-1 rounded-lg hover:bg-black/5 transition-colors"
+          >
+            Cerrar
+          </button>
+        </div>
+      )}
+
       {/* Top Overview Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
@@ -178,21 +255,46 @@ export const LiveResultsTab: React.FC = () => {
           })}
         </div>
 
-        <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+        <div className="flex items-center gap-2 w-full md:w-auto justify-end flex-wrap">
+          <button
+            onClick={handleRecordResultsInSheets}
+            disabled={isRecordingSheets}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+            title="Registrar resultados y escrutinio oficial en la hoja de Google Sheets"
+          >
+            {isRecordingSheets ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+            )}
+            <span>{isRecordingSheets ? 'Registrando...' : 'Registrar en Sheets'}</span>
+          </button>
+
+          <button
+            onClick={handleDownloadResultsWithChartsPDF}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 text-white rounded-xl text-xs font-bold shadow-xs transition-all"
+            title="Descargar informe oficial en PDF con gráficos estadísticos vectoriales"
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>PDF con Gráficos</span>
+          </button>
+
           <button
             onClick={handleDownloadActaE24}
-            className="inline-flex items-center gap-1.5 px-3 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors"
+            title="Descargar Formulario E-24 Oficial de Escrutinio Escolar"
           >
             <FileText className="w-3.5 h-3.5" />
-            <span>Acta General E-24 (PDF)</span>
+            <span>Acta E-24</span>
           </button>
 
           <button
             onClick={handleExportResultsCSV}
             className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold border border-slate-200 transition-colors"
+            title="Exportar archivo CSV con los resultados"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Exportar CSV</span>
+            <span>CSV</span>
           </button>
         </div>
       </div>

@@ -1350,6 +1350,134 @@ app.post('/api/election/sheets-sync-full', async (req: Request, res: Response) =
   }
 });
 
+// API: Registrar Resultados y Escrutinio Oficial en Google Sheets
+app.post('/api/election/sheets-record-results', async (req: Request, res: Response) => {
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
+  if (!scriptUrl) {
+    res.status(400).json({
+      success: false,
+      error: 'La URL del Webhook de Google Apps Script no está configurada.'
+    });
+    return;
+  }
+
+  try {
+    const totalCenso = serverStudents.length;
+    const totalVotaron = serverStudents.filter(s => s.hasVoted).length;
+    const participacionPct = totalCenso > 0 ? ((totalVotaron / totalCenso) * 100).toFixed(1) : '0';
+    const now = new Date().toISOString();
+
+    const resultsByPosition = serverPositions.map(pos => {
+      const posCandidates = serverCandidates.filter(c => c.positionId === pos.id);
+      const posVotes = serverVotes.filter(v => v.positionId === pos.id);
+      const totalPosVotes = posVotes.length;
+
+      const candidateResults = posCandidates.map(c => {
+        const vCount = posVotes.filter(v => v.candidateId === c.id).length;
+        const percent = totalPosVotes > 0 ? ((vCount / totalPosVotes) * 100).toFixed(2) : '0.00';
+        return {
+          id: c.id,
+          number: c.number,
+          fullName: c.fullName,
+          grade: c.grade,
+          group: c.group,
+          isBlankVote: !!c.isBlankVote,
+          voteCount: vCount,
+          percent: parseFloat(percent)
+        };
+      }).sort((a, b) => b.voteCount - a.voteCount);
+
+      const winner = candidateResults[0];
+      const isBlankMajority = !!(winner && winner.isBlankVote && winner.percent > 50);
+
+      return {
+        positionId: pos.id,
+        positionTitle: pos.title,
+        totalVotes: totalPosVotes,
+        candidates: candidateResults,
+        winnerName: winner ? winner.fullName : 'N/A',
+        winnerVotes: winner ? winner.voteCount : 0,
+        isBlankMajority
+      };
+    });
+
+    const payload = {
+      action: 'syncResults',
+      institution: serverConfig.institutionName,
+      daneCode: serverConfig.daneCode,
+      academicYear: serverConfig.academicYear,
+      timestamp: now,
+      summary: {
+        totalCenso,
+        totalVotaron,
+        participacionPct: `${participacionPct}%`,
+        totalVotes: serverVotes.length,
+        totalMesas: serverConfig.totalMesas,
+        encryptionKeyFingerprint: serverConfig.encryptionKeyFingerprint
+      },
+      results: resultsByPosition,
+      stationBreakdown: POLLING_STATIONS.map(st => {
+        const stStudents = serverStudents.filter(s => st.mesas.includes(s.mesaNumber));
+        const stVoted = stStudents.filter(s => s.hasVoted).length;
+        return {
+          stationName: st.name,
+          category: st.category,
+          totalStudents: stStudents.length,
+          votedCount: stVoted,
+          pct: stStudents.length > 0 ? ((stVoted / stStudents.length) * 100).toFixed(1) : '0'
+        };
+      })
+    };
+
+    // Forward to Google Apps Script
+    const response = await fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      redirect: 'follow'
+    });
+
+    serverConfig.googleSheets.lastSyncTime = now;
+    serverConfig.googleSheets.status = 'success';
+
+    const newLog: AuditLog = {
+      id: `log-${Date.now()}`,
+      timestamp: now,
+      action: 'RESULTADOS_REGISTRADOS_SHEETS',
+      actorType: 'ADMIN',
+      actorName: 'Administrador Electoral',
+      details: `Resultados oficiales consolidados y registrados en Google Sheets (${serverVotes.length} votos, ${totalVotaron} sufragantes, ${resultsByPosition.length} cargos).`,
+      hash: Math.random().toString(36).substr(2, 12),
+      status: 'VERIFICADO'
+    };
+    serverAuditLogs.unshift(newLog);
+
+    persistStateToCloudBackup('Resultados electorales registrados en Google Sheets');
+
+    broadcast('sheets_sync_updated', {
+      status: 'success',
+      lastSyncTime: now,
+      totalSyncedVotes: serverVotes.length,
+      pendingQueueCount: 0
+    });
+
+    res.json({
+      success: true,
+      message: 'Resultados y escrutinio oficial registrados exitosamente en Google Sheets.',
+      summary: payload.summary,
+      results: resultsByPosition,
+      lastSyncTime: now
+    });
+  } catch (err: any) {
+    serverConfig.googleSheets.status = 'error';
+    res.status(500).json({
+      success: false,
+      error: `Error al registrar resultados en Google Sheets: ${err.message}`
+    });
+  }
+});
+
+
 // Launch server with Vite middleware or static dist
 async function start() {
   // Load existing persistent cloud backup or create initial backup

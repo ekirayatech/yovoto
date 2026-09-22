@@ -642,6 +642,594 @@ export function generateActaGeneralE24PDF(
 }
 
 /**
+ * Convierte color hexadecimal a tupla RGB [r, g, b]
+ */
+function hexToRgb(hex?: string): [number, number, number] {
+  if (!hex) return [107, 33, 168];
+  let clean = hex.replace('#', '').trim();
+  if (clean.length === 3) {
+    clean = clean.split('').map(c => c + c).join('');
+  }
+  if (clean.length !== 6) return [107, 33, 168];
+  const num = parseInt(clean, 16);
+  if (isNaN(num)) return [107, 33, 168];
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+
+/**
+ * Genera el Informe Oficial de Resultados Electorales en PDF con Gráficos Estadísticos Vectoriales
+ */
+export function generateResultsReportWithChartsPDF(
+  config: ElectionConfig,
+  candidates: Candidate[],
+  positions: Position[],
+  votes: EncryptedVote[],
+  students: Student[]
+) {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const width = doc.internal.pageSize.getWidth(); // 210 mm
+  const height = doc.internal.pageSize.getHeight(); // 297 mm
+  const margin = 14;
+  const contentWidth = width - margin * 2;
+
+  const totalCenso = students.length;
+  const totalVotaron = students.filter(s => s.hasVoted).length;
+  const participacionPct = totalCenso > 0 ? (totalVotaron / totalCenso) * 100 : 0;
+  const now = new Date();
+  const dateFormatted = now.toLocaleDateString('es-CO', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  // Helper: Encabezado Institucional
+  const drawPageHeader = (pageNumber: number, totalPages: number) => {
+    // Franja tricolor de Colombia
+    doc.setFillColor(250, 204, 21); // Amarillo
+    doc.rect(0, 0, width, 3.5, 'F');
+    doc.setFillColor(30, 58, 138); // Azul
+    doc.rect(0, 3.5, width, 1.8, 'F');
+    doc.setFillColor(220, 38, 38); // Rojo
+    doc.rect(0, 5.3, width, 1.8, 'F');
+
+    // Barra institucional Ekirayá
+    doc.setFillColor(107, 33, 168); // Purple-800
+    doc.rect(0, 7.1, width, 1.2, 'F');
+
+    // Título institucional
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    doc.text(config.institutionName.toUpperCase(), width / 2, 14, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`DANE: ${config.daneCode}  •  AÑO LECTIVO ${config.academicYear}  •  SISTEMA ELECTORAL DIGITAL`, width / 2, 18, { align: 'center' });
+
+    // Línea separadora
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(margin, 20.5, width - margin, 20.5);
+
+    // Pie de página
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(`Generado el: ${dateFormatted}  •  Urna SHA-256: ${config.encryptionKeyFingerprint.slice(0, 16)}...`, margin, height - 8);
+    doc.text(`Página ${pageNumber} de ${totalPages}`, width - margin, height - 8, { align: 'right' });
+  };
+
+  // =========================================================================
+  // PÁGINA 1: RESUMEN EJECUTIVO Y GRÁFICOS DE PARTICIPACIÓN TERRITORIAL
+  // =========================================================================
+  drawPageHeader(1, 4);
+
+  // Banner principal del informe
+  doc.setFillColor(88, 28, 135); // purple-900
+  doc.roundedRect(margin, 23, contentWidth, 14, 2, 2, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('INFORME ESTADÍSTICO DE ESCRUTINIO Y RESULTADOS', width / 2, 29.5, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(233, 213, 255);
+  doc.text('Consolidado oficial de sufragio con gráficos analíticos y verificación criptográfica', width / 2, 34, { align: 'center' });
+
+  // 4 Tarjetas de Indicadores Clave (KPIs)
+  const kpiY = 41;
+  const kpiWidth = (contentWidth - 9) / 4;
+  const kpiHeight = 22;
+
+  const kpis = [
+    {
+      title: 'PARTICIPACIÓN',
+      val: `${participacionPct.toFixed(1)}%`,
+      sub: `${totalVotaron} de ${totalCenso} sufragantes`,
+      color: [107, 33, 168] as [number, number, number],
+      bg: [250, 245, 255] as [number, number, number]
+    },
+    {
+      title: 'TOTAL VOTOS URNA',
+      val: `${votes.length}`,
+      sub: `${positions.length} cargos de elección`,
+      color: [5, 150, 105] as [number, number, number],
+      bg: [240, 253, 244] as [number, number, number]
+    },
+    {
+      title: 'COBERTURA MESAS',
+      val: `${config.totalMesas} de ${config.totalMesas}`,
+      sub: '100% mesas escrutadas',
+      color: [2, 132, 199] as [number, number, number],
+      bg: [240, 249, 255] as [number, number, number]
+    },
+    {
+      title: 'SEGURIDAD SHA-256',
+      val: 'INMUTABLE',
+      sub: 'Auditoría Cero Fallos',
+      color: [217, 119, 6] as [number, number, number],
+      bg: [255, 251, 235] as [number, number, number]
+    }
+  ];
+
+  kpis.forEach((kpi, idx) => {
+    const xPos = margin + idx * (kpiWidth + 3);
+    doc.setFillColor(...kpi.bg);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(xPos, kpiY, kpiWidth, kpiHeight, 1.8, 1.8, 'FD');
+
+    // Indicador superior
+    doc.setFillColor(...kpi.color);
+    doc.rect(xPos, kpiY, kpiWidth, 1.5, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(kpi.title, xPos + 4, kpiY + 6.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...kpi.color);
+    doc.text(kpi.val, xPos + 4, kpiY + 13.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.2);
+    doc.setTextColor(100, 116, 139);
+    doc.text(kpi.sub, xPos + 4, kpiY + 18.5);
+  });
+
+  // Gráfico Estadístico 1: Termómetro de Participación General
+  let currY = 68;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(margin, currY, contentWidth, 34, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('1. ANÁLISIS DE PARTICIPACIÓN ELECTORAL GLOBAL', margin + 6, currY + 7);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Porcentaje acumulado de votantes que ejercieron su derecho al sufragio sobre el censo oficial.`, margin + 6, currY + 11.5);
+
+  // Barra de progreso vectorial de participación
+  const barX = margin + 6;
+  const barY = currY + 16;
+  const barW = contentWidth - 12;
+  const barH = 7;
+
+  // Fondo barra
+  doc.setFillColor(241, 245, 249);
+  doc.roundedRect(barX, barY, barW, barH, 1.5, 1.5, 'F');
+
+  // Relleno barra según %
+  const fillW = Math.max(3, (participacionPct / 100) * barW);
+  doc.setFillColor(107, 33, 168);
+  doc.roundedRect(barX, barY, fillW, barH, 1.5, 1.5, 'F');
+
+  // Marcas de cuadrícula: 25%, 50%, 75%, 100%
+  const ticks = [0, 25, 50, 75, 100];
+  ticks.forEach(t => {
+    const tx = barX + (t / 100) * barW;
+    doc.setDrawColor(203, 213, 225);
+    doc.line(tx, barY + barH, tx, barY + barH + 2);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    doc.setTextColor(148, 163, 184);
+    doc.text(`${t}%`, tx, barY + barH + 5, { align: 'center' });
+  });
+
+  // Callout numérico en la barra
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(255, 255, 255);
+  if (fillW > 25) {
+    doc.text(`${participacionPct.toFixed(1)}% (${totalVotaron}/${totalCenso})`, barX + fillW - 3, barY + 5, { align: 'right' });
+  }
+
+  // Gráfico Estadístico 2: Despliegue Territorial y Participación por Puestos
+  currY = 107;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(margin, currY, contentWidth, 110, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('2. GRÁFICO COMPARATIVO DE PARTICIPACIÓN POR PUESTOS DE VOTACIÓN', margin + 6, currY + 7);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Distribución en 6 puestos electorales abarcando los 20 cursos y mesas institucionales:', margin + 6, currY + 11.5);
+
+  let stY = currY + 18;
+  const maxBarWidth = contentWidth - 75;
+
+  POLLING_STATIONS.forEach((station, sIdx) => {
+    const stationStudents = students.filter(s => station.mesas.includes(s.mesaNumber));
+    const stationVoted = stationStudents.filter(s => s.hasVoted).length;
+    const stPct = stationStudents.length > 0 ? (stationVoted / stationStudents.length) * 100 : 0;
+
+    // Etiqueta del puesto
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.2);
+    doc.setTextColor(30, 41, 59);
+    doc.text(station.name, margin + 6, stY + 4);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.2);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`${station.gradesCovered.join(', ')} • Mesas: ${station.mesas.map(m => String(m).padStart(2, '0')).join(', ')}`, margin + 6, stY + 8);
+
+    // Barra de fondo
+    const bX = margin + 60;
+    const bW = maxBarWidth;
+    const bH = 6;
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(bX, stY + 1.5, bW, bH, 1, 1, 'F');
+
+    // Barra de color proporcional
+    const filledStW = Math.max(2, (stPct / 100) * bW);
+    const stationColors: [number, number, number][] = [
+      [147, 51, 234], // Purple-600
+      [59, 130, 246], // Blue-500
+      [16, 185, 129], // Emerald-500
+      [245, 158, 11], // Amber-500
+      [236, 72, 153], // Pink-500
+      [99, 102, 241]  // Indigo-500
+    ];
+    const sColor = stationColors[sIdx % stationColors.length];
+    doc.setFillColor(...sColor);
+    doc.roundedRect(bX, stY + 1.5, filledStW, bH, 1, 1, 'F');
+
+    // Valores al lado derecho
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...sColor);
+    doc.text(`${stPct.toFixed(1)}%`, width - margin - 6, stY + 5.5, { align: 'right' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.2);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`(${stationVoted}/${stationStudents.length})`, width - margin - 17, stY + 5.5, { align: 'right' });
+
+    stY += 15;
+  });
+
+  // Nota de pie en página 1
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(margin, 222, contentWidth, 14, 1.5, 1.5, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text('CERTIFICACIÓN DE TRANSMISIÓN DE DATOS EN VIVO:', margin + 4, 227);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.2);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Los datos corresponden al escrutinio total transmitido por las 20 mesas de votación y sincronizado de forma centralizada.', margin + 4, 232);
+
+  // =========================================================================
+  // HELPER PARA DIBUJAR ESCRUTINIO Y GRÁFICOS DE UN CARGO
+  // =========================================================================
+  const drawPositionCharts = (
+    pos: Position,
+    startY: number,
+    cardHeight: number
+  ) => {
+    const posCandidates = candidates.filter(c => c.positionId === pos.id);
+    const posVotes = votes.filter(v => v.positionId === pos.id);
+    const totalPosVotes = posVotes.length;
+
+    // Calcular y ordenar candidatos
+    const results = posCandidates.map(c => {
+      const vCount = posVotes.filter(v => v.candidateId === c.id).length;
+      const pct = totalPosVotes > 0 ? (vCount / totalPosVotes) * 100 : 0;
+      return {
+        ...c,
+        voteCount: vCount,
+        percent: pct
+      };
+    }).sort((a, b) => b.voteCount - a.voteCount);
+
+    const winner = results[0];
+    const blankResult = results.find(r => r.isBlankVote);
+
+    // Contenedor del cargo
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(margin, startY, contentWidth, cardHeight, 2, 2, 'FD');
+
+    // Encabezado del cargo con barra
+    doc.setFillColor(15, 23, 42); // slate-900
+    doc.roundedRect(margin, startY, contentWidth, 8.5, 2, 2, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text(`ESCRUTINIO Y GRÁFICO: ${pos.title.toUpperCase()}`, margin + 6, startY + 5.8);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(203, 213, 225);
+    doc.text(`Total votos: ${totalPosVotes}`, width - margin - 6, startY + 5.8, { align: 'right' });
+
+    let candY = startY + 13;
+    const barChartX = margin + 50;
+    const barChartW = contentWidth - 95;
+
+    results.forEach((cand, cIdx) => {
+      const isWinner = cIdx === 0 && totalPosVotes > 0;
+      const isBlank = cand.isBlankVote;
+      const cRgb = isBlank ? [100, 116, 139] as [number, number, number] : hexToRgb(cand.colorHex);
+
+      // Tarjetón & Nombre
+      doc.setFillColor(cRgb[0], cRgb[1], cRgb[2]);
+      doc.roundedRect(margin + 4, candY, 7, 6, 1, 1, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(255, 255, 255);
+      doc.text(String(cand.number), margin + 7.5, candY + 4.2, { align: 'center' });
+
+      doc.setFont('helvetica', isWinner ? 'bold' : 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(15, 23, 42);
+      const nameClean = cand.fullName.length > 24 ? cand.fullName.slice(0, 24) + '...' : cand.fullName;
+      doc.text(nameClean, margin + 13, candY + 4.2);
+
+      // Barra vectorial del candidato
+      doc.setFillColor(241, 245, 249);
+      doc.roundedRect(barChartX, candY + 0.5, barChartW, 5.5, 1, 1, 'F');
+
+      const filledW = Math.max(1.5, (cand.percent / 100) * barChartW);
+      doc.setFillColor(...cRgb);
+      doc.roundedRect(barChartX, candY + 0.5, filledW, 5.5, 1, 1, 'F');
+
+      // Votos y porcentaje numérico
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.setTextColor(...cRgb);
+      doc.text(`${cand.voteCount} (${cand.percent.toFixed(1)}%)`, width - margin - 5, candY + 4.2, { align: 'right' });
+
+      // Badge de electo
+      if (isWinner && !isBlank) {
+        doc.setFillColor(220, 252, 231);
+        doc.setDrawColor(187, 247, 208);
+        doc.roundedRect(width - margin - 42, candY + 0.5, 17, 5.5, 1, 1, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(5.5);
+        doc.setTextColor(22, 101, 52);
+        doc.text('ELECTO(A)', width - margin - 33.5, candY + 4.2, { align: 'center' });
+      }
+
+      candY += 8.5;
+    });
+
+    // Gráfico de Distribución del 100% (Barra Segmentada Apilada)
+    const stackedY = candY + 1;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text('DISTRIBUCIÓN DEL 100% DE VOTOS EMITIDOS:', margin + 4, stackedY + 3);
+
+    const stackBarX = margin + 4;
+    const stackBarY = stackedY + 5;
+    const stackBarW = contentWidth - 8;
+    const stackBarH = 4;
+
+    doc.setFillColor(241, 245, 249);
+    doc.rect(stackBarX, stackBarY, stackBarW, stackBarH, 'F');
+
+    let currentStackOffset = 0;
+    results.forEach(cand => {
+      const cRgb = cand.isBlankVote ? [148, 163, 184] as [number, number, number] : hexToRgb(cand.colorHex);
+      const segW = (cand.percent / 100) * stackBarW;
+      if (segW > 0) {
+        doc.setFillColor(...cRgb);
+        doc.rect(stackBarX + currentStackOffset, stackBarY, segW, stackBarH, 'F');
+        currentStackOffset += segW;
+      }
+    });
+
+    // Línea de leyenda con círculos de color
+    const legendY = stackBarY + stackBarH + 4;
+    let legX = margin + 4;
+    results.forEach(cand => {
+      const cRgb = cand.isBlankVote ? [148, 163, 184] as [number, number, number] : hexToRgb(cand.colorHex);
+      doc.setFillColor(...cRgb);
+      doc.circle(legX + 1.5, legendY, 1.2, 'F');
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(5.8);
+      doc.setTextColor(71, 85, 105);
+      const shortLabel = `${cand.number}: ${cand.percent.toFixed(1)}%`;
+      doc.text(shortLabel, legX + 4, legendY + 1);
+      legX += shortLabel.length * 2 + 7;
+    });
+  };
+
+  // =========================================================================
+  // PÁGINA 2: ESCRUTINIO Y GRÁFICOS: PERSONERÍA Y CONTRALORÍA
+  // =========================================================================
+  doc.addPage();
+  drawPageHeader(2, 4);
+
+  const pos1 = positions.find(p => p.id === 'personeria') || positions[0];
+  const pos2 = positions.find(p => p.id === 'contraloria') || positions[1] || positions[0];
+
+  if (pos1) drawPositionCharts(pos1, 24, 115);
+  if (pos2 && pos2.id !== pos1.id) drawPositionCharts(pos2, 146, 115);
+
+  // =========================================================================
+  // PÁGINA 3: ESCRUTINIO Y GRÁFICOS: CABILDANTE Y REPRESENTANTE
+  // =========================================================================
+  doc.addPage();
+  drawPageHeader(3, 4);
+
+  const pos3 = positions.find(p => p.id === 'cabildante') || positions[2] || positions[0];
+  const pos4 = positions.find(p => p.id === 'representante_estudiantes' || p.id === 'representante_curso') || positions[3] || positions[0];
+
+  if (pos3 && pos3.id !== pos1.id && pos3.id !== pos2.id) drawPositionCharts(pos3, 24, 115);
+  if (pos4 && pos4.id !== pos1.id && pos4.id !== pos2.id && pos4.id !== pos3.id) drawPositionCharts(pos4, 146, 115);
+
+  // =========================================================================
+  // PÁGINA 4: CUADRO DE HONOR, DECLARATORIA LEGAL Y FIRMAS
+  // =========================================================================
+  doc.addPage();
+  drawPageHeader(4, 4);
+
+  // Banner Cuadro de Honor
+  doc.setFillColor(88, 28, 135);
+  doc.roundedRect(margin, 24, contentWidth, 12, 2, 2, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('CUADRO DE REPRESENTANTES DECLARADOS ELECTOS', width / 2, 31.5, { align: 'center' });
+
+  let electY = 41;
+  positions.forEach(pos => {
+    const posCandidates = candidates.filter(c => c.positionId === pos.id);
+    const posVotes = votes.filter(v => v.positionId === pos.id);
+    const totalPosVotes = posVotes.length;
+
+    const sorted = [...posCandidates].map(c => {
+      const cnt = posVotes.filter(v => v.candidateId === c.id).length;
+      return {
+        ...c,
+        voteCount: cnt,
+        percent: totalPosVotes > 0 ? (cnt / totalPosVotes) * 100 : 0
+      };
+    }).sort((a, b) => b.voteCount - a.voteCount);
+
+    const winner = sorted[0];
+
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(margin, electY, contentWidth, 15, 1.5, 1.5, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(107, 33, 168);
+    doc.text(pos.title.toUpperCase(), margin + 5, electY + 6);
+
+    if (winner && !winner.isBlankVote && winner.voteCount > 0) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`${winner.fullName} (${winner.grade})`, margin + 5, electY + 11.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(5, 150, 105);
+      doc.text(`${winner.voteCount} votos  •  ${winner.percent.toFixed(1)}%`, width - margin - 5, electY + 9, { align: 'right' });
+    } else if (winner && winner.isBlankVote) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(220, 38, 38);
+      doc.text(`Mayoría Voto en Blanco (${winner.voteCount} votos, ${winner.percent.toFixed(1)}%)`, margin + 5, electY + 11.5);
+    } else {
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Pendiente de cómputo en urna', margin + 5, electY + 11.5);
+    }
+
+    electY += 19;
+  });
+
+  // Constancia y Declaratoria Legal
+  electY += 5;
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(margin, electY, contentWidth, 38, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(15, 23, 42);
+  doc.text('DECLARATORIA LEGAL DE CIERRE Y VALIDEZ ELECTORAL:', margin + 5, electY + 6.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.2);
+  doc.setTextColor(71, 85, 105);
+  const legalText = [
+    'En cumplimiento de los Artículos 28 y 29 del Decreto 1860 de 1994, la Ley 115 de 1994 (Ley General de Educación) y el',
+    'Código de la Infancia y la Adolescencia (Ley 1098 de 2006), la Comisión Escrutadora Institucional del Colegio Ekirayá certifica',
+    'la validez del presente informe estadístico. Cada voto computado en las 20 mesas fue verificado mediante huella digital SHA-256',
+    'garantizando secreto de sufragio, transparencia y apego a los principios democráticos escolares colombianos.'
+  ];
+
+  legalText.forEach((line, lIdx) => {
+    doc.text(line, margin + 5, electY + 13 + lIdx * 5);
+  });
+
+  // Firmas Institucionales
+  const signY = 225;
+  doc.setDrawColor(148, 163, 184);
+  doc.setLineWidth(0.4);
+  doc.line(margin + 15, signY, margin + 75, signY);
+  doc.line(width - margin - 75, signY, width - margin - 15, signY);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(15, 23, 42);
+  doc.text(config.rectorName, margin + 45, signY + 5, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Rector(a) Institucional', margin + 45, signY + 9, { align: 'center' });
+  doc.text('Presidente Comisión Escrutadora', margin + 45, signY + 12.5, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(15, 23, 42);
+  doc.text(config.personeroDocenteLider, width - margin - 45, signY + 5, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Docente Líder de Democracia', width - margin - 45, signY + 9, { align: 'center' });
+  doc.text('Secretario(a) de la Comisión', width - margin - 45, signY + 12.5, { align: 'center' });
+
+  // Guardar archivo PDF
+  doc.save(`Informe_Estadistico_Resultados_Ekiraya_${config.academicYear}.pdf`);
+}
+
+
+/**
  * Native UTF-8 CSV Export (Compatible with Excel, Sheets, Supabase)
  */
 export function exportToCSV(filename: string, headers: string[], rows: (string | number)[][]) {

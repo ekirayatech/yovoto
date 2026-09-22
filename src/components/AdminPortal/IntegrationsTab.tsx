@@ -887,6 +887,48 @@ function doPost(e) {
       });
     }
 
+    // 5.1 REGISTRAR RESULTADOS Y ESCRUTINIO EN HOJA DEDICADA
+    if (data.action === "syncResults" || data.action === "recordResults") {
+      var sheetRes = ss.getSheetByName("Resultados_Electorales") || ss.insertSheet("Resultados_Electorales");
+      sheetRes.clearContents();
+
+      sheetRes.appendRow(["ELECCIONES GOBIERNO ESCOLAR - COLEGIO EKIRAYÁ CEM"]);
+      sheetRes.appendRow(["Fecha y Hora de Escrutinio:", data.timestamp || now.toISOString(), "DANE:", data.daneCode || "311001099881", "Año Lectivo:", data.academicYear || "2026"]);
+      if (data.summary) {
+        sheetRes.appendRow(["Censo Total:", data.summary.totalCenso, "Sufragantes:", data.summary.totalVotaron, "Participación:", data.summary.participacionPct, "Mesas:", data.summary.totalMesas]);
+      }
+      sheetRes.appendRow([]); // Separador
+
+      sheetRes.appendRow(["Cargo Electoral", "Tarjetón", "Candidato", "Grado", "Votos Obtenidos", "% Porcentaje", "Declaratoria Oficial"]);
+      var resRows = [];
+      var resultsList = data.results || [];
+      resultsList.forEach(function(posItem) {
+        var cList = posItem.candidates || [];
+        cList.forEach(function(cand, idx) {
+          var status = (idx === 0 && cand.voteCount > 0) ? (cand.isBlankVote ? "MAYORÍA EN BLANCO" : "ELECTO(A)") : "NO ELECTO";
+          resRows.push([
+            posItem.positionTitle || posItem.positionId,
+            cand.number || 0,
+            cand.fullName,
+            cand.grade || "",
+            cand.voteCount || 0,
+            (cand.percent || 0) + "%",
+            status
+          ]);
+        });
+      });
+
+      if (resRows.length > 0) {
+        sheetRes.getRange(6, 1, resRows.length, 7).setValues(resRows);
+      }
+
+      return respondJSON({
+        status: "SUCCESS",
+        message: "Resultados oficiales y escrutinio registrados con éxito en la pestaña 'Resultados_Electorales' de Google Sheets.",
+        rowsCount: resRows.length
+      });
+    }
+
     // 6. DEPÓSITO DE VOTO CON CONTROL DE CONCURRENCIA MULTIEQUIPOS
     if (data.action === "castVote" || data.voteToken) {
       if (sheetUrna.getLastRow() === 0) {

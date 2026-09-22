@@ -382,3 +382,22 @@ export async function writeAllToSheets(
     ...data
   });
 }
+
+/** Registrar Resultados y Escrutinio Oficial en Google Sheets */
+export async function recordResultsToSheets(
+  scriptUrl: string,
+  data: {
+    institution: string;
+    daneCode: string;
+    academicYear: string;
+    timestamp?: string;
+    summary: Record<string, any>;
+    results: any[];
+    stationBreakdown?: any[];
+  }
+): Promise<SheetsTestResult> {
+  return writeToSheets(scriptUrl, {
+    action: 'syncResults',
+    ...data
+  });
+}

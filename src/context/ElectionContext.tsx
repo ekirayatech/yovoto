@@ -39,7 +39,8 @@ import {
   writeCandidatesToSheets,
   writeJuradosToSheets,
   writeVotersToSheets,
-  writeVoteToSheets
+  writeVoteToSheets,
+  recordResultsToSheets as recordResultsToSheetsDirect
 } from '../utils/googleSheetsService';
 
 interface ElectionContextType {
@@ -86,6 +87,7 @@ interface ElectionContextType {
   // Centralized Google Sheets Real-time Sync
   sheetsSyncInfo: SheetsSyncStatusInfo;
   forceServerSheetsSync: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
+  recordResultsToSheets: () => Promise<{ success: boolean; message: string; details?: any }>;
 
   // Authentication states & actions
   isAdminAuthenticated: boolean;
@@ -520,6 +522,75 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (err: any) {
       setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: err.message }));
       return { success: false, rowsSynced: 0, message: err.message };
+    }
+  };
+
+  const recordResultsToSheets = async (): Promise<{ success: boolean; message: string; details?: any }> => {
+    try {
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
+      const res = await fetch('/api/election/sheets-record-results', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setSheetsSyncInfo(prev => ({
+          ...prev,
+          status: 'success',
+          lastSyncTime: data.lastSyncTime || new Date().toISOString()
+        }));
+        return { success: true, message: data.message, details: data.results };
+      }
+
+      // Fallback: direct browser fetch to Google Apps Script webhook
+      const targetScriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+      const totalCenso = students.length;
+      const totalVotaron = students.filter(s => s.hasVoted).length;
+      const participacionPct = totalCenso > 0 ? ((totalVotaron / totalCenso) * 100).toFixed(1) : '0';
+
+      const directRes = await recordResultsToSheetsDirect(targetScriptUrl, {
+        institution: config.institutionName,
+        daneCode: config.daneCode,
+        academicYear: config.academicYear,
+        summary: {
+          totalCenso,
+          totalVotaron,
+          participacionPct: `${participacionPct}%`,
+          totalVotes: votes.length,
+          totalMesas: config.totalMesas,
+          encryptionKeyFingerprint: config.encryptionKeyFingerprint
+        },
+        results: positions.map(pos => {
+          const posCands = candidates.filter(c => c.positionId === pos.id);
+          const posVotes = votes.filter(v => v.positionId === pos.id);
+          return {
+            positionId: pos.id,
+            positionTitle: pos.title,
+            totalVotes: posVotes.length,
+            candidates: posCands.map(c => {
+              const vCount = posVotes.filter(v => v.candidateId === c.id).length;
+              const pct = posVotes.length > 0 ? ((vCount / posVotes.length) * 100).toFixed(2) : '0.00';
+              return {
+                ...c,
+                voteCount: vCount,
+                percent: parseFloat(pct)
+              };
+            }).sort((a, b) => b.voteCount - a.voteCount)
+          };
+        })
+      });
+
+      if (directRes.success) {
+        setSheetsSyncInfo(prev => ({
+          ...prev,
+          status: 'success',
+          lastSyncTime: new Date().toISOString()
+        }));
+        return { success: true, message: directRes.message };
+      }
+
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: data.error || directRes.message }));
+      return { success: false, message: data.error || directRes.message };
+    } catch (err: any) {
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: err.message }));
+      return { success: false, message: err.message };
     }
   };
 
@@ -2250,7 +2321,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         downloadCloudBackup,
         uploadAndRestoreCloudBackup,
         sheetsSyncInfo,
-        forceServerSheetsSync
+        forceServerSheetsSync,
+        recordResultsToSheets
       }}
     >
       {children}
