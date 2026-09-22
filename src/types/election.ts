@@ -189,3 +189,38 @@ export interface AdminMember {
   status: 'ACTIVO' | 'INACTIVO';
   lastAccessAt?: string;
 }
+
+export interface TerminalInfo {
+  id: string;
+  name: string;
+  role: string;
+  mesaNumber?: number;
+  lastPing: number;
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+export interface CloudBackupSnapshot {
+  id: string;
+  timestamp: string;
+  reason: string;
+  totalVotes: number;
+  totalVotersVoted: number;
+  totalCensus: number;
+  checksum: string;
+  sizeBytes?: number;
+  sheetsSyncStatus?: 'SYNCED' | 'PENDING' | 'ERROR';
+}
+
+export interface SheetsSyncStatusInfo {
+  isConnected: boolean;
+  scriptUrl: string;
+  sheetId: string;
+  autoSync: boolean;
+  lastSyncTime?: string;
+  status: 'idle' | 'syncing' | 'success' | 'error';
+  pendingQueueCount: number;
+  totalSyncedVotes: number;
+  lastError?: string;
+}
+

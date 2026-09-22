@@ -11,6 +11,8 @@ import { AdminLoginForm } from './components/Auth/AdminLoginForm';
 import { JuradoLoginForm } from './components/Auth/JuradoLoginForm';
 import { Header } from './components/Header';
 import { JuradoDashboard } from './components/JuradoPortal/JuradoDashboard';
+import { CloudBackupModal } from './components/Modals/CloudBackupModal';
+import { MultiDeviceSyncModal } from './components/Modals/MultiDeviceSyncModal';
 import { NormativeModal } from './components/NormativeModal';
 import { BallotBox } from './components/VoterPortal/BallotBox';
 import { VoteConfirmationModal } from './components/VoterPortal/VoteConfirmationModal';
@@ -103,6 +105,12 @@ function MainLayout() {
         isOpen={isNormativeOpen}
         onClose={() => setIsNormativeOpen(false)}
       />
+
+      {/* Multi-Device Synchronized Network Modal */}
+      <MultiDeviceSyncModal />
+
+      {/* Cloud Backup and Google Sheets Modal */}
+      <CloudBackupModal />
 
       {/* Institutional Footer */}
       <footer className="bg-white border-t border-slate-200 py-6 px-4 no-print text-xs text-slate-500">

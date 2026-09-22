@@ -4,6 +4,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Cloud,
   Code2,
   Copy,
   Database,
@@ -15,6 +16,7 @@ import {
   Globe,
   HelpCircle,
   Key,
+  Laptop,
   Layers,
   Lock,
   Play,
@@ -59,7 +61,11 @@ export const IntegrationsTab: React.FC = () => {
     jurados,
     admins,
     loadTableFromSheets,
-    syncTableToSheets
+    syncTableToSheets,
+    setIsMultiDeviceModalOpen,
+    setIsCloudBackupModalOpen,
+    connectedComputersCount,
+    sheetsSyncInfo
   } = useElection();
 
   const [activeSubTab, setActiveSubTab] = useState<'sheets' | 'github' | 'vercel' | 'supabase'>('sheets');
@@ -869,19 +875,27 @@ function doPost(e) {
       });
     }
 
-    // 6. DEPÓSITO DE VOTO INDIVIDUAL
+    // 6. DEPÓSITO DE VOTO CON CONTROL DE CONCURRENCIA MULTIEQUIPOS
     if (data.action === "castVote" || data.voteToken) {
       if (sheetUrna.getLastRow() === 0) {
         sheetUrna.appendRow(["Fecha y Hora", "Cargo", "Candidato ID", "Mesa", "Token Voto Cifrado", "Hash SHA-256"]);
       }
-      sheetUrna.appendRow([
-        now,
-        data.positionId || "N/A",
-        data.candidateId || "N/A",
-        data.mesaNumber || 1,
-        data.voteToken || ("TOK-" + now.getTime()),
-        data.hash || "SHA256-PENDING"
-      ]);
+      
+      var votesList = Array.isArray(data.votes) && data.votes.length > 0 ? data.votes : [data];
+      var voteRows = [];
+      votesList.forEach(function(v) {
+        voteRows.push([
+          v.timestamp || now.toISOString(),
+          v.positionId || "N/A",
+          v.candidateId || "N/A",
+          v.mesaNumber || data.mesaNumber || 1,
+          v.voteToken || ("TOK-" + now.getTime()),
+          v.hash || "SHA256-PENDING"
+        ]);
+      });
+      if (voteRows.length > 0) {
+        sheetUrna.getRange(sheetUrna.getLastRow() + 1, 1, voteRows.length, 6).setValues(voteRows);
+      }
 
       if (data.studentDoc) {
         var cleanTarget = String(data.studentDoc).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().trim();
@@ -904,7 +918,7 @@ function doPost(e) {
         }
       }
 
-      return respondJSON({ status: "SUCCESS", message: "Voto depositado en Urna_Cifrada de Google Sheets." });
+      return respondJSON({ status: "SUCCESS", message: "Votos registrados en Urna_Cifrada de Google Sheets." });
     }
 
     return respondJSON({ status: "SUCCESS", message: "Operación procesada en Google Sheets." });
@@ -979,6 +993,45 @@ function respondJSON(obj) {
       {/* ========================================================================= */}
       {activeSubTab === 'sheets' && (
         <div className="space-y-6 animate-fadeIn">
+          {/* Multi-computer & Cloud Backup Live Indicator Banner */}
+          <div className="p-4 bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 text-white rounded-2xl shadow-sm border border-purple-800/40 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-white/10 rounded-xl border border-white/10 shrink-0">
+                <Laptop className="w-6 h-6 text-purple-300" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-bold">Red Multicomputador y Respaldo Continuo en la Nube</h4>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-400 text-emerald-950">
+                    SINCRONIZACIÓN EN VIVO
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  {connectedComputersCount} {connectedComputersCount === 1 ? 'computador conectado' : 'computadores conectados'} transmitiendo en tiempo real y registrando simultáneamente en la misma hoja central con control de concurrencia.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsMultiDeviceModalOpen(true)}
+                className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-xl text-xs font-bold transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Laptop className="w-3.5 h-3.5 text-purple-200" />
+                Ver Equipos ({connectedComputersCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsCloudBackupModalOpen(true)}
+                className="px-3.5 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-xl text-xs font-bold transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <Cloud className="w-3.5 h-3.5 text-slate-950" />
+                Panel Nube y Sheets
+              </button>
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
             <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-3.5">

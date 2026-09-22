@@ -1,4 +1,6 @@
+import crypto from 'crypto';
 import express, { Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -25,7 +27,12 @@ import {
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+
+// Cloud & Persistent Storage Paths
+const DATA_DIR = path.join(process.cwd(), 'data');
+const BACKUP_FILE = path.join(DATA_DIR, 'election_cloud_backup.json');
+const SNAPSHOTS_FILE = path.join(DATA_DIR, 'snapshots_history.json');
 
 // Authoritative Election State held on server
 let serverConfig: ElectionConfig = { ...INITIAL_CONFIG };
@@ -36,6 +43,113 @@ let serverJurados: JuradoMember[] = [...INITIAL_JURADOS];
 let serverAdmins: AdminMember[] = [...INITIAL_ADMINS];
 let serverVotes: EncryptedVote[] = [];
 let serverSuperadminInbox: CertificateInboxMessage[] = [];
+
+// Cloud Snapshots History
+interface CloudSnapshot {
+  id: string;
+  timestamp: string;
+  reason: string;
+  totalVotes: number;
+  totalVotersVoted: number;
+  totalCensus: number;
+  checksum: string;
+  sizeBytes: number;
+  sheetsSyncStatus: 'SYNCED' | 'PENDING' | 'ERROR';
+}
+
+let cloudSnapshotsList: CloudSnapshot[] = [];
+
+// Google Sheets Queued Writes & Metrics
+interface PendingSheetsWrite {
+  id: string;
+  action: string;
+  payload: any;
+  timestamp: string;
+  attempts: number;
+}
+let sheetsPendingQueue: PendingSheetsWrite[] = [];
+let totalSyncedVotesCount = 0;
+
+// Persist server state to disk/cloud backup
+function persistStateToCloudBackup(reason = 'Respaldo automático') {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const statePayload = {
+      config: serverConfig,
+      positions: serverPositions,
+      candidates: serverCandidates,
+      students: serverStudents,
+      jurados: serverJurados,
+      admins: serverAdmins,
+      votes: serverVotes,
+      auditLogs: serverAuditLogs,
+      superadminInbox: serverSuperadminInbox,
+      savedAt: new Date().toISOString()
+    };
+    const jsonStr = JSON.stringify(statePayload, null, 2);
+    fs.writeFileSync(BACKUP_FILE, jsonStr, 'utf-8');
+
+    const hash = crypto.createHash('sha256').update(jsonStr).digest('hex');
+    const votedCount = serverStudents.filter(s => s.hasVoted).length;
+
+    const snapshot: CloudSnapshot = {
+      id: `snap-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      reason,
+      totalVotes: serverVotes.length,
+      totalVotersVoted: votedCount,
+      totalCensus: serverStudents.length,
+      checksum: hash.slice(0, 16),
+      sizeBytes: Buffer.byteLength(jsonStr, 'utf-8'),
+      sheetsSyncStatus: serverConfig.googleSheets?.status === 'success' ? 'SYNCED' : 'PENDING'
+    };
+
+    cloudSnapshotsList = [snapshot, ...cloudSnapshotsList.slice(0, 24)];
+    try {
+      fs.writeFileSync(SNAPSHOTS_FILE, JSON.stringify(cloudSnapshotsList, null, 2), 'utf-8');
+    } catch {}
+
+    broadcast('cloud_backup_updated', {
+      lastBackupTime: snapshot.timestamp,
+      snapshot,
+      totalSnapshots: cloudSnapshotsList.length
+    });
+  } catch (err: any) {
+    console.error('Error al persistir respaldo en la nube:', err.message);
+  }
+}
+
+// Restore state from cloud backup if exists
+function loadStateFromCloudBackup() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(BACKUP_FILE)) {
+      const raw = fs.readFileSync(BACKUP_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      if (data.config) serverConfig = { ...serverConfig, ...data.config };
+      if (Array.isArray(data.positions) && data.positions.length > 0) serverPositions = data.positions;
+      if (Array.isArray(data.candidates) && data.candidates.length > 0) serverCandidates = data.candidates;
+      if (Array.isArray(data.students) && data.students.length > 0) serverStudents = data.students;
+      if (Array.isArray(data.jurados) && data.jurados.length > 0) serverJurados = data.jurados;
+      if (Array.isArray(data.admins) && data.admins.length > 0) serverAdmins = data.admins;
+      if (Array.isArray(data.votes)) serverVotes = data.votes;
+      if (Array.isArray(data.auditLogs) && data.auditLogs.length > 0) serverAuditLogs = data.auditLogs;
+      if (Array.isArray(data.superadminInbox)) serverSuperadminInbox = data.superadminInbox;
+      console.log(`[Cloud Backup] Respaldo previo cargado con éxito: ${serverVotes.length} votos, ${serverStudents.length} estudiantes.`);
+    }
+    if (fs.existsSync(SNAPSHOTS_FILE)) {
+      const snapRaw = fs.readFileSync(SNAPSHOTS_FILE, 'utf-8');
+      cloudSnapshotsList = JSON.parse(snapRaw);
+    }
+  } catch (err: any) {
+    console.warn('[Cloud Backup] No se pudo restaurar estado anterior:', err.message);
+  }
+}
+
 
 // Generate seed votes for initially voted students
 function generateInitialServerVotes(): EncryptedVote[] {
@@ -150,6 +264,8 @@ interface ActiveTerminal {
   role: string;
   mesaNumber?: number;
   lastPing: number;
+  ipAddress?: string;
+  userAgent?: string;
 }
 
 const activeTerminals = new Map<string, ActiveTerminal>();
@@ -167,6 +283,105 @@ function broadcast(event: string, data: unknown) {
     }
   }
 }
+
+// Google Sheets Centralized Dispatch
+async function recordVoteToGoogleSheets(
+  student: Student,
+  newVotes: EncryptedVote[],
+  folioNumber: string,
+  timestamp: string
+) {
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl;
+  if (!scriptUrl) return;
+
+  const payload = {
+    action: 'castVote',
+    studentDoc: student.documentNumber,
+    studentName: student.fullName,
+    grade: student.grade,
+    group: student.group,
+    mesaNumber: student.mesaNumber,
+    folioNumber,
+    timestamp,
+    votes: newVotes.map(v => ({
+      voteToken: v.voteToken,
+      positionId: v.positionId,
+      candidateId: v.candidateId,
+      mesaNumber: v.mesaNumber,
+      hash: v.hash,
+      timestamp: v.timestamp
+    }))
+  };
+
+  try {
+    const res = await fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      redirect: 'follow'
+    });
+
+    serverConfig.googleSheets.lastSyncTime = new Date().toISOString();
+    serverConfig.googleSheets.status = 'success';
+    totalSyncedVotesCount += newVotes.length;
+
+    broadcast('sheets_sync_updated', {
+      status: 'success',
+      lastSyncTime: serverConfig.googleSheets.lastSyncTime,
+      totalSyncedVotes: totalSyncedVotesCount,
+      folioNumber,
+      studentName: student.fullName
+    });
+  } catch (err: any) {
+    console.warn('Google Sheets no respondió de inmediato, guardando en cola de reintentos:', err.message);
+    serverConfig.googleSheets.status = 'syncing';
+    sheetsPendingQueue.push({
+      id: `queue-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      action: 'castVote',
+      payload,
+      timestamp: new Date().toISOString(),
+      attempts: 0
+    });
+    broadcast('sheets_sync_updated', {
+      status: 'syncing',
+      lastSyncTime: serverConfig.googleSheets.lastSyncTime,
+      pendingQueueCount: sheetsPendingQueue.length,
+      lastError: err.message
+    });
+  }
+}
+
+// Background queue flusher for Google Sheets
+setInterval(async () => {
+  if (sheetsPendingQueue.length === 0) return;
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl;
+  if (!scriptUrl) return;
+
+  const item = sheetsPendingQueue[0];
+  item.attempts++;
+  try {
+    const res = await fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(item.payload),
+      redirect: 'follow'
+    });
+    if (res.ok) {
+      sheetsPendingQueue.shift();
+      serverConfig.googleSheets.lastSyncTime = new Date().toISOString();
+      serverConfig.googleSheets.status = 'success';
+      broadcast('sheets_sync_updated', {
+        status: 'success',
+        lastSyncTime: serverConfig.googleSheets.lastSyncTime,
+        pendingQueueCount: sheetsPendingQueue.length
+      });
+    }
+  } catch (e) {
+    if (item.attempts >= 5) {
+      sheetsPendingQueue.shift(); // drop stale after 5 retries
+    }
+  }
+}, 12000);
 
 // Clean up stale terminals periodically (older than 20 seconds)
 setInterval(() => {
@@ -207,7 +422,17 @@ app.get('/api/events', (req: Request, res: Response) => {
   // Send initial connection event
   res.write(`event: connected\ndata: ${JSON.stringify({
     message: 'Conexión multiequipo establecida con éxito',
-    terminalsCount: Math.max(1, activeTerminals.size)
+    terminalsCount: Math.max(1, activeTerminals.size),
+    sheetsStatus: {
+      lastSyncTime: serverConfig.googleSheets?.lastSyncTime,
+      status: serverConfig.googleSheets?.status || 'idle',
+      pendingQueueCount: sheetsPendingQueue.length,
+      totalSyncedVotes: totalSyncedVotesCount
+    },
+    cloudBackup: {
+      lastBackupTime: cloudSnapshotsList[0]?.timestamp,
+      totalSnapshots: cloudSnapshotsList.length
+    }
   })}\n\n`);
 
   req.on('close', () => {
@@ -218,23 +443,38 @@ app.get('/api/events', (req: Request, res: Response) => {
 // API: Heartbeat ping from each computer/terminal
 app.post('/api/terminal/ping', (req: Request, res: Response) => {
   const { id, name, role, mesaNumber } = req.body;
+  const isNew = id ? !activeTerminals.has(id) : false;
+  const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+  const ipAddress = rawIp.replace('::ffff:', '');
+  const userAgent = ((req.headers['user-agent'] as string) || 'Dispositivo').slice(0, 45);
+
   if (id) {
     activeTerminals.set(id, {
       id,
       name: name || 'Computador Ekirayá',
       role: role || 'VOTANTE',
       mesaNumber: mesaNumber ? Number(mesaNumber) : undefined,
-      lastPing: Date.now()
+      lastPing: Date.now(),
+      ipAddress,
+      userAgent
     });
   }
 
   const activeList = Array.from(activeTerminals.values());
+  if (isNew) {
+    broadcast('terminals_updated', {
+      activeCount: Math.max(1, activeTerminals.size),
+      terminals: activeList
+    });
+  }
+
   res.json({
     success: true,
     activeCount: Math.max(1, activeTerminals.size),
     terminals: activeList
   });
 });
+
 
 // API: Full synchronized state for any computer connecting
 app.get('/api/election/state', (req: Request, res: Response) => {
@@ -406,6 +646,12 @@ app.post('/api/election/vote', (req: Request, res: Response) => {
   });
 
   broadcast('certificate_inbox_received', { inboxMessage: inboxMsg, log: emailLog });
+
+  // 1. Centralized Instant Cloud Backup
+  persistStateToCloudBackup(`Voto depositado en urna - Folio ${folioNumber}`);
+
+  // 2. Real-time write to the unified Google Sheet
+  recordVoteToGoogleSheets(student, newVotesToAdd, folioNumber, timestamp);
 
   res.json({
     success: true,
@@ -854,6 +1100,8 @@ app.post('/api/election/reset', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog];
 
+  persistStateToCloudBackup('Reinicio general de la jornada electoral');
+
   broadcast('election_reset', {
     students: serverStudents,
     votes: serverVotes,
@@ -865,8 +1113,222 @@ app.post('/api/election/reset', (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+// API: Cloud Backup - Get Status & Snapshots List
+app.get('/api/election/cloud-backup', (req: Request, res: Response) => {
+  const fileExists = fs.existsSync(BACKUP_FILE);
+  let fileSize = 0;
+  if (fileExists) {
+    try {
+      fileSize = fs.statSync(BACKUP_FILE).size;
+    } catch {}
+  }
+  res.json({
+    success: true,
+    fileExists,
+    fileSize,
+    totalSnapshots: cloudSnapshotsList.length,
+    lastBackupTime: cloudSnapshotsList[0]?.timestamp || null,
+    latestSnapshot: cloudSnapshotsList[0] || null,
+    snapshots: cloudSnapshotsList,
+    totalVotes: serverVotes.length,
+    totalVotersVoted: serverStudents.filter(s => s.hasVoted).length,
+    totalCensus: serverStudents.length
+  });
+});
+
+// API: Cloud Backup - Create Manual Snapshot
+app.post('/api/election/cloud-backup/create', (req: Request, res: Response) => {
+  const { reason } = req.body;
+  const snapshotReason = reason || 'Respaldo manual solicitado por el usuario';
+  persistStateToCloudBackup(snapshotReason);
+
+  res.json({
+    success: true,
+    message: 'Respaldo en la nube generado exitosamente.',
+    snapshot: cloudSnapshotsList[0]
+  });
+});
+
+// API: Cloud Backup - Restore from Snapshot or File
+app.post('/api/election/cloud-backup/restore', (req: Request, res: Response) => {
+  try {
+    loadStateFromCloudBackup();
+
+    const restoreLog: AuditLog = {
+      id: `log-restore-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      action: 'SISTEMA_INICIO',
+      actorType: 'ADMIN',
+      actorName: 'Supervisión Central',
+      details: `Restauración completa desde respaldo en la nube (${serverVotes.length} votos, ${serverStudents.length} estudiantes)`,
+      hash: Math.random().toString(36).substr(2, 12),
+      status: 'VERIFICADO'
+    };
+    serverAuditLogs = [restoreLog, ...serverAuditLogs];
+
+    broadcast('all_synced', {
+      students: serverStudents,
+      candidates: serverCandidates,
+      jurados: serverJurados,
+      admins: serverAdmins,
+      config: serverConfig,
+      votes: serverVotes
+    });
+
+    res.json({
+      success: true,
+      message: 'Estado electoral restaurado exitosamente desde la nube.',
+      totalVotes: serverVotes.length,
+      totalStudents: serverStudents.length
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Cloud Backup - Download JSON File
+app.get('/api/election/cloud-backup/download', (req: Request, res: Response) => {
+  try {
+    if (!fs.existsSync(BACKUP_FILE)) {
+      persistStateToCloudBackup('Generación para descarga');
+    }
+    const filename = `respaldo_electoral_ekiraya_${new Date().toISOString().slice(0, 10)}.json`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.sendFile(BACKUP_FILE);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Cloud Backup - Upload and Restore Backup
+app.post('/api/election/cloud-backup/upload', (req: Request, res: Response) => {
+  try {
+    const { backupData } = req.body;
+    if (!backupData) {
+      res.status(400).json({ success: false, error: 'No se recibieron datos de respaldo.' });
+      return;
+    }
+
+    const data = typeof backupData === 'string' ? JSON.parse(backupData) : backupData;
+    if (data.config) serverConfig = { ...serverConfig, ...data.config };
+    if (Array.isArray(data.positions)) serverPositions = data.positions;
+    if (Array.isArray(data.candidates)) serverCandidates = data.candidates;
+    if (Array.isArray(data.students)) serverStudents = data.students;
+    if (Array.isArray(data.jurados)) serverJurados = data.jurados;
+    if (Array.isArray(data.admins)) serverAdmins = data.admins;
+    if (Array.isArray(data.votes)) serverVotes = data.votes;
+    if (Array.isArray(data.auditLogs)) serverAuditLogs = data.auditLogs;
+    if (Array.isArray(data.superadminInbox)) serverSuperadminInbox = data.superadminInbox;
+
+    persistStateToCloudBackup('Restauración desde archivo cargado');
+
+    broadcast('all_synced', {
+      students: serverStudents,
+      candidates: serverCandidates,
+      jurados: serverJurados,
+      admins: serverAdmins,
+      config: serverConfig,
+      votes: serverVotes
+    });
+
+    res.json({
+      success: true,
+      message: 'Respaldo importado y restaurado exitosamente en todos los computadores.',
+      totalVotes: serverVotes.length,
+      totalStudents: serverStudents.length
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: `Error al procesar archivo de respaldo: ${err.message}` });
+  }
+});
+
+// API: Google Sheets Sync Status for Unified Central Sheet
+app.get('/api/election/sheets-status', (req: Request, res: Response) => {
+  const isConnected = !!(serverConfig.googleSheets?.scriptUrl && serverConfig.googleSheets?.scriptUrl.trim().length > 10);
+  res.json({
+    success: true,
+    isConnected,
+    scriptUrl: serverConfig.googleSheets?.scriptUrl || '',
+    sheetId: serverConfig.googleSheets?.sheetId || '',
+    autoSync: serverConfig.googleSheets?.autoSync ?? true,
+    lastSyncTime: serverConfig.googleSheets?.lastSyncTime || null,
+    status: serverConfig.googleSheets?.status || (isConnected ? 'idle' : 'unconfigured'),
+    pendingQueueCount: sheetsPendingQueue.length,
+    totalSyncedVotes: totalSyncedVotesCount
+  });
+});
+
+// API: Full Batch Sync to Unified Google Sheet from Server
+app.post('/api/election/sheets-sync-full', async (req: Request, res: Response) => {
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl;
+  if (!scriptUrl) {
+    res.status(400).json({
+      success: false,
+      error: 'La URL del Webhook de Google Apps Script no está configurada.'
+    });
+    return;
+  }
+
+  try {
+    // 1. Send all data: students census, candidates, jurados, admins, and votes
+    const payload = {
+      action: 'syncAll',
+      students: serverStudents,
+      candidates: serverCandidates,
+      jurados: serverJurados,
+      admins: serverAdmins,
+      votes: serverVotes,
+      institution: serverConfig.institutionName,
+      daneCode: serverConfig.daneCode,
+      timestamp: new Date().toISOString()
+    };
+
+    const response = await fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      redirect: 'follow'
+    });
+
+    serverConfig.googleSheets.lastSyncTime = new Date().toISOString();
+    serverConfig.googleSheets.status = 'success';
+    totalSyncedVotesCount = serverVotes.length;
+    sheetsPendingQueue = []; // Clear queue on full sync
+
+    persistStateToCloudBackup('Sincronización completa con Google Sheets');
+
+    broadcast('sheets_sync_updated', {
+      status: 'success',
+      lastSyncTime: serverConfig.googleSheets.lastSyncTime,
+      totalSyncedVotes: totalSyncedVotesCount,
+      pendingQueueCount: 0
+    });
+
+    res.json({
+      success: true,
+      message: 'Sincronización completa con Google Sheets finalizada exitosamente.',
+      rowsSynced: serverVotes.length + serverStudents.length,
+      lastSyncTime: serverConfig.googleSheets.lastSyncTime
+    });
+  } catch (err: any) {
+    serverConfig.googleSheets.status = 'error';
+    res.status(500).json({
+      success: false,
+      error: `Error al sincronizar con Google Sheets: ${err.message}`
+    });
+  }
+});
+
 // Launch server with Vite middleware or static dist
 async function start() {
+  // Load existing persistent cloud backup or create initial backup
+  if (fs.existsSync(BACKUP_FILE)) {
+    loadStateFromCloudBackup();
+  } else {
+    persistStateToCloudBackup('Inicialización de jornada electoral');
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

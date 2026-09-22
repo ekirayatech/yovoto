@@ -12,15 +12,18 @@ import {
   AppRole,
   AuditLog,
   Candidate,
+  CertificateInboxMessage,
+  CloudBackupSnapshot,
   DocumentType,
   ElectionConfig,
   ElectionStatus,
   EncryptedVote,
   JuradoMember,
   Position,
+  SheetsSyncStatusInfo,
   Student,
-  VotingCertificate,
-  CertificateInboxMessage
+  TerminalInfo,
+  VotingCertificate
 } from '../types/election';
 import { calculateBlockHash, generateFolioCode, sha256, simpleFastHash } from '../utils/crypto';
 import {
@@ -38,13 +41,6 @@ import {
   writeVotersToSheets,
   writeVoteToSheets
 } from '../utils/googleSheetsService';
-
-interface TerminalInfo {
-  id: string;
-  name: string;
-  role: string;
-  mesaNumber?: number;
-}
 
 interface ElectionContextType {
   config: ElectionConfig;
@@ -72,6 +68,24 @@ interface ElectionContextType {
   setTerminalName: (name: string) => void;
   terminalsList: TerminalInfo[];
   refreshServerState: () => Promise<void>;
+  setThisTerminalConfig: (name: string, role?: AppRole, mesa?: number) => void;
+
+  // Modals for Multi-Device and Cloud Backup
+  isMultiDeviceModalOpen: boolean;
+  setIsMultiDeviceModalOpen: (open: boolean) => void;
+  isCloudBackupModalOpen: boolean;
+  setIsCloudBackupModalOpen: (open: boolean) => void;
+
+  // Cloud Backup and Persistence
+  cloudSnapshots: CloudBackupSnapshot[];
+  createCloudSnapshot: (reason?: string) => Promise<{ success: boolean; message: string }>;
+  restoreCloudSnapshot: () => Promise<{ success: boolean; message: string }>;
+  downloadCloudBackup: () => void;
+  uploadAndRestoreCloudBackup: (fileContent: string) => Promise<{ success: boolean; message: string }>;
+
+  // Centralized Google Sheets Real-time Sync
+  sheetsSyncInfo: SheetsSyncStatusInfo;
+  forceServerSheetsSync: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
 
   // Authentication states & actions
   isAdminAuthenticated: boolean;
@@ -389,6 +403,114 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [terminalsList, setTerminalsList] = useState<TerminalInfo[]>([]);
   const [superadminInbox, setSuperadminInbox] = useState<CertificateInboxMessage[]>([]);
 
+  // Modals for Multi-Device and Cloud Backup
+  const [isMultiDeviceModalOpen, setIsMultiDeviceModalOpen] = useState<boolean>(false);
+  const [isCloudBackupModalOpen, setIsCloudBackupModalOpen] = useState<boolean>(false);
+
+  // Cloud Backup and Snapshots
+  const [cloudSnapshots, setCloudSnapshots] = useState<CloudBackupSnapshot[]>([]);
+
+  // Unified Google Sheets Real-time Sync Status
+  const [sheetsSyncInfo, setSheetsSyncInfo] = useState<SheetsSyncStatusInfo>({
+    isConnected: false,
+    scriptUrl: '',
+    sheetId: '',
+    autoSync: true,
+    status: 'idle',
+    pendingQueueCount: 0,
+    totalSyncedVotes: 0
+  });
+
+  const setThisTerminalConfig = (name: string, role?: AppRole, mesa?: number) => {
+    setTerminalName(name);
+    if (role) {
+      setCurrentRole(role);
+      try { localStorage.setItem('ekiraya_role', role); } catch {}
+    }
+    if (mesa !== undefined) {
+      setJuradoMesa(mesa);
+      try { localStorage.setItem('ekiraya_jurado_mesa', String(mesa)); } catch {}
+    }
+  };
+
+  const createCloudSnapshot = async (reason = 'Punto de restauración manual') => {
+    try {
+      const res = await fetch('/api/election/cloud-backup/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason })
+      });
+      const data = await res.json();
+      if (data.success && data.snapshot) {
+        setCloudSnapshots(prev => [data.snapshot, ...prev.filter(s => s.id !== data.snapshot.id)]);
+        return { success: true, message: 'Respaldo generado exitosamente.' };
+      }
+      return { success: false, message: data.error || 'Error al generar respaldo.' };
+    } catch (err: any) {
+      return { success: false, message: err.message };
+    }
+  };
+
+  const restoreCloudSnapshot = async () => {
+    try {
+      const res = await fetch('/api/election/cloud-backup/restore', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        await refreshServerState();
+        return { success: true, message: data.message || 'Restauración completada.' };
+      }
+      return { success: false, message: data.error || 'Error en la restauración.' };
+    } catch (err: any) {
+      return { success: false, message: err.message };
+    }
+  };
+
+  const downloadCloudBackup = () => {
+    window.open('/api/election/cloud-backup/download', '_blank');
+  };
+
+  const uploadAndRestoreCloudBackup = async (fileContent: string) => {
+    try {
+      const parsed = JSON.parse(fileContent);
+      const res = await fetch('/api/election/cloud-backup/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backupData: parsed })
+      });
+      const data = await res.json();
+      if (data.success) {
+        await refreshServerState();
+        return { success: true, message: data.message };
+      }
+      return { success: false, message: data.error || 'Error al procesar archivo.' };
+    } catch (err: any) {
+      return { success: false, message: `Archivo inválido: ${err.message}` };
+    }
+  };
+
+  const forceServerSheetsSync = async () => {
+    try {
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
+      const res = await fetch('/api/election/sheets-sync-full', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setSheetsSyncInfo(prev => ({
+          ...prev,
+          status: 'success',
+          lastSyncTime: data.lastSyncTime || new Date().toISOString(),
+          totalSyncedVotes: votes.length,
+          pendingQueueCount: 0
+        }));
+        return { success: true, rowsSynced: data.rowsSynced, message: data.message };
+      }
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: data.error }));
+      return { success: false, rowsSynced: 0, message: data.error || 'Error al sincronizar' };
+    } catch (err: any) {
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: err.message }));
+      return { success: false, rowsSynced: 0, message: err.message };
+    }
+  };
+
   // Local BroadcastChannel for instant cross-tab sync on same machine
   const [broadcastChannel, setBroadcastChannel] = useState<BroadcastChannel | null>(null);
 
@@ -620,6 +742,42 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (data.terminals) setTerminalsList(data.terminals);
           } catch (err) {
             console.error('Error procesando terminals_updated:', err);
+          }
+        });
+
+        sse.addEventListener('sheets_sync_updated', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            setSheetsSyncInfo(prev => ({
+              ...prev,
+              status: data.status || prev.status,
+              lastSyncTime: data.lastSyncTime || prev.lastSyncTime,
+              pendingQueueCount: data.pendingQueueCount !== undefined ? data.pendingQueueCount : prev.pendingQueueCount,
+              totalSyncedVotes: data.totalSyncedVotes !== undefined ? data.totalSyncedVotes : prev.totalSyncedVotes
+            }));
+            if (data.lastSyncTime) {
+              setConfig(prev => ({
+                ...prev,
+                googleSheets: {
+                  ...prev.googleSheets,
+                  lastSyncTime: data.lastSyncTime,
+                  status: data.status || prev.googleSheets.status
+                }
+              }));
+            }
+          } catch (err) {
+            console.error('Error procesando sheets_sync_updated:', err);
+          }
+        });
+
+        sse.addEventListener('cloud_backup_updated', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.snapshot) {
+              setCloudSnapshots(prev => [data.snapshot, ...prev.filter(s => s.id !== data.snapshot.id)]);
+            }
+          } catch (err) {
+            console.error('Error procesando cloud_backup_updated:', err);
           }
         });
 
@@ -2047,7 +2205,19 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         markInboxMessageRead,
         sendCertificateToSuperadmin,
         resetElectionData,
-        addAuditLog
+        addAuditLog,
+        setThisTerminalConfig,
+        isMultiDeviceModalOpen,
+        setIsMultiDeviceModalOpen,
+        isCloudBackupModalOpen,
+        setIsCloudBackupModalOpen,
+        cloudSnapshots,
+        createCloudSnapshot,
+        restoreCloudSnapshot,
+        downloadCloudBackup,
+        uploadAndRestoreCloudBackup,
+        sheetsSyncInfo,
+        forceServerSheetsSync
       }}
     >
       {children}

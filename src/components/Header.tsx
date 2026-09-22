@@ -1,8 +1,11 @@
 import {
   Clock,
+  Cloud,
   HelpCircle,
+  Laptop,
   Lock,
   LogOut,
+  Radio,
   Scale,
   ShieldCheck,
   UserCheck,
@@ -30,7 +33,12 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
     isJuradoAuthenticated,
     logoutAdmin,
     logoutJurado,
-    juradoName
+    juradoName,
+    connectedComputersCount,
+    isMultiComputerLive,
+    setIsMultiDeviceModalOpen,
+    setIsCloudBackupModalOpen,
+    sheetsSyncInfo
   } = useElection();
   const [currentTime, setCurrentTime] = useState<string>('');
 
@@ -141,16 +149,42 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
           </div>
 
           {/* Role Navigation & Utility Controls */}
-          <div className="flex items-center gap-2.5 w-full md:w-auto justify-between md:justify-end overflow-x-auto pb-1 md:pb-0">
+          <div className="flex items-center gap-2 w-full md:w-auto justify-between md:justify-end overflow-x-auto pb-1 md:pb-0">
+            {/* Multi-Device Terminals Live Button */}
+            <button
+              id="btn-multi-terminal"
+              onClick={() => setIsMultiDeviceModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg transition-colors shrink-0 shadow-2xs cursor-pointer"
+              title="Equipos conectados en red en tiempo real"
+            >
+              <Laptop className="w-3.5 h-3.5 text-purple-700" />
+              <span>{connectedComputersCount} {connectedComputersCount === 1 ? 'Equipo' : 'Equipos'}</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${isMultiComputerLive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
+            </button>
+
+            {/* Cloud Backup & Google Sheets Button */}
+            <button
+              id="btn-cloud-backup"
+              onClick={() => setIsCloudBackupModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-sky-900 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors shrink-0 shadow-2xs cursor-pointer"
+              title="Respaldo en la nube y sincronización con Google Sheets"
+            >
+              <Cloud className="w-3.5 h-3.5 text-sky-700" />
+              <span className="hidden sm:inline">Nube & Sheets</span>
+              {sheetsSyncInfo.status === 'success' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              )}
+            </button>
+
             {/* Normative Button */}
             <button
               id="btn-open-normative"
               onClick={onOpenNormative}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors shrink-0"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors shrink-0 cursor-pointer"
               title="Ver Normativa Colombiana"
             >
               <Scale className="w-3.5 h-3.5 text-purple-700" />
-              <span className="hidden sm:inline">Normativa</span> Ley 115
+              <span className="hidden sm:inline">Ley 115</span>
             </button>
 
             {/* Role Switcher Pill Group */}
