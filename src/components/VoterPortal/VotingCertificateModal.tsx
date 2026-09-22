@@ -120,27 +120,30 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
         </div>
 
         {/* Automatic Email Notification Banner */}
-        {certificate.studentEmail && (
-          <div className="mx-6 mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-950 flex items-start gap-3 shadow-xs no-print">
-            <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <Check className="w-5 h-5 stroke-[2.5]" />
-            </div>
-            <div className="flex-1 text-xs">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-black text-emerald-900 text-sm">
-                  Certificado enviado automáticamente a su correo electrónico
-                </span>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200 text-emerald-900">
-                  <Mail className="w-3 h-3 text-emerald-800" />
-                  Envío Automático Exitoso
-                </span>
-              </div>
-              <p className="text-emerald-800 mt-1 leading-relaxed">
-                Se ha remitido automáticamente la constancia oficial con código QR y folio <strong>{certificate.folioNumber}</strong> a su buzón institucional: <strong className="underline underline-offset-2 font-mono text-emerald-950">{certificate.studentEmail}</strong>.
-              </p>
-            </div>
+        <div className="mx-6 mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-300 text-emerald-950 flex items-start gap-3 shadow-xs no-print">
+          <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <Check className="w-5 h-5 stroke-[2.5]" />
           </div>
-        )}
+          <div className="flex-1 text-xs space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-black text-emerald-900 text-sm">
+                Certificado remitido automáticamente a la Bandeja del Superadministrador
+              </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200 text-emerald-900">
+                <Mail className="w-3 h-3 text-emerald-800" />
+                Despacho Institucional Exitoso
+              </span>
+            </div>
+            <p className="text-emerald-800 leading-relaxed">
+              El certificado con folio <strong>{certificate.folioNumber}</strong> ha sido enviado automáticamente desde el correo institucional <strong className="font-mono text-emerald-950">{certificate.fromEmail || config.institutionEmail || 'rectoria@ekiraya.edu.co'}</strong> a la Bandeja del Superadministrador (<span className="font-mono text-emerald-950">{config.superadminEmail || 'rectoria@ekiraya.edu.co'}</span>) para custodia y archivo electoral.
+            </p>
+            {certificate.studentEmail && (
+              <p className="text-emerald-800 leading-relaxed text-[11px]">
+                Copia enviada al buzón del estudiante: <strong className="font-mono text-emerald-950">{certificate.studentEmail}</strong>.
+              </p>
+            )}
+          </div>
+        </div>
 
         {/* Printable Document Element */}
         <div id="printable-document" className="p-6 md:p-8 bg-slate-50 border-b border-slate-200">
@@ -199,9 +202,15 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
                     Mesa N° {String(certificate.mesaNumber).padStart(2, '0')} - {certStation.name} ({certStation.category})
                   </span>
                 </div>
-                <div className="flex items-center justify-between py-1">
+                <div className="flex items-center justify-between py-1 border-b border-slate-100">
                   <span className="font-semibold text-slate-500">Fecha y Hora:</span>
                   <span className="font-medium text-slate-800">{formattedDate}</span>
+                </div>
+                <div className="flex items-center justify-between py-1">
+                  <span className="font-semibold text-slate-500">Despacho Institucional:</span>
+                  <span className="font-medium text-emerald-800 text-[11px] font-mono">
+                    De: {certificate.fromEmail || config.institutionEmail || 'rectoria@ekiraya.edu.co'} &rarr; Bandeja Superadmin
+                  </span>
                 </div>
               </div>
 

@@ -87,6 +87,28 @@ export interface VotingCertificate {
   schoolLogo?: string;
   daneCode: string;
   rectorName: string;
+  fromEmail?: string;
+  sentToSuperadminAt?: string;
+}
+
+export interface CertificateInboxMessage {
+  id: string;
+  folioNumber: string;
+  timestamp: string;
+  fromEmail: string; // Correo institucional (ej: rectoria@ekiraya.edu.co / elecciones@ekiraya.edu.co)
+  toEmail: string;   // Bandeja del superadministrador (ej: rectoria@ekiraya.edu.co / mebolanos@cem.edu.co)
+  studentId: string;
+  studentName: string;
+  documentType: DocumentType;
+  documentNumber: string;
+  grade: string;
+  group: string;
+  mesaNumber: number;
+  verificationHash: string;
+  certificate: VotingCertificate;
+  status: 'ENTREGADO' | 'PENDIENTE';
+  read: boolean;
+  subject: string;
 }
 
 export type ElectionStatus = 'CONFIGURACION' | 'ABIERTA' | 'CERRADA' | 'ESCRUTADA';
@@ -138,6 +160,8 @@ export interface ElectionConfig {
   googleSheets: GoogleSheetsConfig;
   supabase: SupabaseConfig;
   encryptionKeyFingerprint: string;
+  institutionEmail?: string;
+  superadminEmail?: string;
 }
 
 export type AppRole = 'VOTANTE' | 'JURADO' | 'ADMIN';

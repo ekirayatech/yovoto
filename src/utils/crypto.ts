@@ -58,19 +58,17 @@ export function calculateBlockHash(prevHash: string, voteData: {
  * Generate a standalone SVG Data URL QR Code representing the voting certificate verification
  * No external API required, works 100% offline & inside iframe
  */
-export function generateCertificateQRCode(verificationUrl: string): string {
-  // Deterministic 21x21 QR-like matrix generation for visual authenticity & offline scanner display
+export function getQRCodeMatrix(verificationUrl: string): boolean[][] {
   const size = 21;
   const hash = simpleFastHash(verificationUrl);
   const matrix: boolean[][] = Array(size).fill(false).map(() => Array(size).fill(false));
 
-  // Helper to draw finder pattern (7x7 with 3x3 center)
   function drawFinderPattern(row: number, col: number) {
     for (let r = 0; r < 7; r++) {
       for (let c = 0; c < 7; c++) {
         if (
-          r === 0 || r === 6 || c === 0 || c === 6 || // border
-          (r >= 2 && r <= 4 && c >= 2 && c <= 4) // inner square
+          r === 0 || r === 6 || c === 0 || c === 6 ||
+          (r >= 2 && r <= 4 && c >= 2 && c <= 4)
         ) {
           matrix[row + r][col + c] = true;
         } else {
@@ -80,22 +78,18 @@ export function generateCertificateQRCode(verificationUrl: string): string {
     }
   }
 
-  // Draw 3 standard finder patterns
-  drawFinderPattern(0, 0); // Top-left
-  drawFinderPattern(0, size - 7); // Top-right
-  drawFinderPattern(size - 7, 0); // Bottom-left
+  drawFinderPattern(0, 0);
+  drawFinderPattern(0, size - 7);
+  drawFinderPattern(size - 7, 0);
 
-  // Timing patterns
   for (let i = 8; i < size - 8; i++) {
     matrix[6][i] = i % 2 === 0;
     matrix[i][6] = i % 2 === 0;
   }
 
-  // Populate data area deterministically with verification hash bits
   let bitIdx = 0;
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
-      // Don't overwrite finder patterns and timing patterns
       const inFinder1 = r < 8 && c < 8;
       const inFinder2 = r < 8 && c >= size - 8;
       const inFinder3 = r >= size - 8 && c < 8;
@@ -109,7 +103,13 @@ export function generateCertificateQRCode(verificationUrl: string): string {
     }
   }
 
-  // Build SVG string
+  return matrix;
+}
+
+export function generateCertificateQRCode(verificationUrl: string): string {
+  const size = 21;
+  const matrix = getQRCodeMatrix(verificationUrl);
+
   const cellSize = 10;
   const quietZone = 20;
   const fullSize = size * cellSize + quietZone * 2;

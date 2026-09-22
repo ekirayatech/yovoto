@@ -7,6 +7,7 @@ import {
   FileCheck2,
   FileSpreadsheet,
   FileText,
+  Inbox,
   KeyRound,
   Lock,
   PauseCircle,
@@ -31,14 +32,17 @@ import { IntegrationsTab } from './IntegrationsTab';
 import { JuradosManagerTab } from './JuradosManagerTab';
 import { LiveResultsTab } from './LiveResultsTab';
 import { OfficialActasTab } from './OfficialActasTab';
+import { SuperadminInboxTab } from './SuperadminInboxTab';
 import { UnifiedSheetsImportModal } from './UnifiedSheetsImportModal';
 
-type AdminTab = 'results' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'integrations';
+type AdminTab = 'results' | 'inbox' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'integrations';
 
 export const AdminDashboard: React.FC = () => {
-  const { config, updateElectionStatus, resetElectionData, students, votes } = useElection();
+  const { config, updateElectionStatus, resetElectionData, students, votes, superadminInbox } = useElection();
   const [currentTab, setCurrentTab] = useState<AdminTab>('results');
   const [isSheetsImportOpen, setIsSheetsImportOpen] = useState<boolean>(false);
+
+  const unreadCertificates = superadminInbox.filter(m => !m.read).length;
 
   const handleStatusChange = (newStatus: ElectionStatus) => {
     if (newStatus === 'CERRADA' && !confirm('¿Está seguro de cerrar las urnas? Los estudiantes ya no podrán emitir más votos.')) {
@@ -144,6 +148,7 @@ export const AdminDashboard: React.FC = () => {
         <div className="flex items-center gap-1.5 mt-6 pt-5 border-t border-slate-100 overflow-x-auto pb-1">
           {[
             { id: 'results', label: 'Resultados en Vivo', icon: BarChart3 },
+            { id: 'inbox', label: 'Bandeja Certificados', icon: Inbox, badge: unreadCertificates > 0 ? unreadCertificates : undefined },
             { id: 'actas', label: 'Actas Oficiales (E-14 / E-24)', icon: FileText },
             { id: 'census', label: 'Censo Estudiantil', icon: Users },
             { id: 'candidates', label: 'Candidatos & Tarjetón', icon: Award },
@@ -168,6 +173,15 @@ export const AdminDashboard: React.FC = () => {
               >
                 <Icon className="w-3.5 h-3.5" />
                 <span>{tab.label}</span>
+                {tab.badge !== undefined && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                      isCurrent ? 'bg-white text-purple-900' : 'bg-purple-700 text-white'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -176,6 +190,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Active Tab View */}
       {currentTab === 'results' && <LiveResultsTab />}
+      {currentTab === 'inbox' && <SuperadminInboxTab />}
       {currentTab === 'actas' && <OfficialActasTab />}
       {currentTab === 'census' && <CensusManagerTab />}
       {currentTab === 'candidates' && <CandidateManagerTab />}

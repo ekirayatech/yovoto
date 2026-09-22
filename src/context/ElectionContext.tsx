@@ -19,7 +19,8 @@ import {
   JuradoMember,
   Position,
   Student,
-  VotingCertificate
+  VotingCertificate,
+  CertificateInboxMessage
 } from '../types/election';
 import { calculateBlockHash, generateFolioCode, sha256, simpleFastHash } from '../utils/crypto';
 import {
@@ -102,6 +103,9 @@ interface ElectionContextType {
   saveTableToSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string }>;
   syncWithGoogleSheets: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
   sendCertificateByEmail: (email: string, cert: VotingCertificate) => Promise<{ success: boolean; message: string }>;
+  superadminInbox: CertificateInboxMessage[];
+  markInboxMessageRead: (id: string) => Promise<void>;
+  sendCertificateToSuperadmin: (cert: VotingCertificate) => Promise<{ success: boolean; message: string }>;
   resetElectionData: () => void;
   addAuditLog: (action: AuditLog['action'], actorType: AuditLog['actorType'], actorName: string, details: string, mesaNumber?: number) => void;
 }
@@ -383,6 +387,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [connectedComputersCount, setConnectedComputersCount] = useState<number>(1);
   const [isMultiComputerLive, setIsMultiComputerLive] = useState<boolean>(false);
   const [terminalsList, setTerminalsList] = useState<TerminalInfo[]>([]);
+  const [superadminInbox, setSuperadminInbox] = useState<CertificateInboxMessage[]>([]);
 
   // Local BroadcastChannel for instant cross-tab sync on same machine
   const [broadcastChannel, setBroadcastChannel] = useState<BroadcastChannel | null>(null);
@@ -436,6 +441,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (data.admins && data.admins.length > 0) setAdmins(data.admins);
         if (data.votes) setVotes(data.votes);
         if (data.auditLogs) setAuditLogs(data.auditLogs);
+        if (data.superadminInbox) setSuperadminInbox(data.superadminInbox);
         if (data.terminalsCount) setConnectedComputersCount(data.terminalsCount);
         if (data.terminals) setTerminalsList(data.terminals);
         setIsMultiComputerLive(true);
@@ -481,6 +487,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             }
             if (data.newLog) {
               setAuditLogs(prev => [data.newLog, ...prev]);
+            }
+            if (data.inboxMessage) {
+              setSuperadminInbox(prev => [data.inboxMessage, ...prev.filter(m => m.id !== data.inboxMessage.id)]);
             }
           } catch (err) {
             console.error('Error procesando evento vote_cast:', err);
@@ -566,6 +575,29 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           } catch {}
         });
 
+        sse.addEventListener('certificate_inbox_received', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.inboxMessage) {
+              setSuperadminInbox(prev => [data.inboxMessage, ...prev.filter(m => m.id !== data.inboxMessage.id)]);
+            }
+            if (data.log) {
+              setAuditLogs(prev => [data.log, ...prev]);
+            }
+          } catch (err) {
+            console.error('Error procesando certificate_inbox_received:', err);
+          }
+        });
+
+        sse.addEventListener('inbox_marked_read', (e: MessageEvent) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.id) {
+              setSuperadminInbox(prev => prev.map(m => (m.id === data.id ? { ...m, read: true } : m)));
+            }
+          } catch {}
+        });
+
         sse.addEventListener('election_reset', (e: MessageEvent) => {
           try {
             const data = JSON.parse(e.data);
@@ -573,6 +605,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (data.votes) setVotes(data.votes);
             if (data.config) setConfig(data.config);
             if (data.newLog) setAuditLogs([data.newLog]);
+            setSuperadminInbox([]);
             setActiveVoter(null);
             setLatestCertificate(null);
           } catch (err) {
@@ -916,6 +949,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       )
     );
 
+    // Institutional and superadmin email addresses
+    const fromEmail = config.institutionEmail || 'rectoria@ekiraya.edu.co';
+    const toSuperadminEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
+
     // Build Certificate
     const certificate: VotingCertificate = {
       folioNumber,
@@ -930,10 +967,35 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       verificationHash,
       schoolName: config.institutionName,
       daneCode: config.daneCode,
-      rectorName: config.rectorName
+      rectorName: config.rectorName,
+      fromEmail,
+      sentToSuperadminAt: timestamp
     };
 
     setLatestCertificate(certificate);
+
+    // Automatic dispatch to Superadministrator inbox
+    const inboxMessage: CertificateInboxMessage = {
+      id: `inbox-${Date.now()}-${folioNumber}`,
+      folioNumber,
+      timestamp,
+      fromEmail,
+      toEmail: toSuperadminEmail,
+      studentId: activeVoter.id,
+      studentName: activeVoter.fullName,
+      documentType: activeVoter.documentType,
+      documentNumber: activeVoter.documentNumber,
+      grade: activeVoter.grade,
+      group: activeVoter.group,
+      mesaNumber: activeVoter.mesaNumber,
+      verificationHash,
+      certificate,
+      status: 'ENTREGADO',
+      read: false,
+      subject: `Certificado Electoral de Sufragio - Folio ${folioNumber} - ${activeVoter.fullName} (${activeVoter.grade} - ${activeVoter.group})`
+    };
+
+    setSuperadminInbox(prev => [inboxMessage, ...prev.filter(m => m.folioNumber !== folioNumber)]);
 
     // Automatic email delivery of voting certificate to voter's registered email
     if (activeVoter.email) {
@@ -941,6 +1003,14 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         console.warn('Error en el envío automático del certificado al correo del estudiante:', err);
       });
     }
+
+    addAuditLog(
+      'ACTA_GENERADA',
+      'SISTEMA',
+      'Servidor de Correo Institucional',
+      `Certificado Folio ${folioNumber} remitido desde ${fromEmail} a la Bandeja del Superadministrador (${toSuperadminEmail}) para ${activeVoter.fullName}`,
+      activeVoter.mesaNumber
+    );
 
     addAuditLog(
       'VOTO_EMITIDO',
@@ -1848,9 +1918,64 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   };
 
+  // Dispatch certificate to Superadmin Inbox
+  const sendCertificateToSuperadmin = async (cert: VotingCertificate) => {
+    const fromEmail = config.institutionEmail || 'rectoria@ekiraya.edu.co';
+    const toEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
+
+    try {
+      const res = await fetch('/api/election/send-certificate-to-superadmin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cert, fromEmail, toEmail })
+      });
+      const data = await res.json();
+      if (data.inboxMessage) {
+        setSuperadminInbox(prev => [data.inboxMessage, ...prev.filter(m => m.id !== data.inboxMessage.id)]);
+      }
+      return { success: true, message: data.message || `Certificado entregado en la bandeja del Superadministrador (${toEmail})` };
+    } catch {
+      // Local fallback
+      const fallbackMsg: CertificateInboxMessage = {
+        id: `inbox-cert-${Date.now()}`,
+        folioNumber: cert.folioNumber,
+        timestamp: cert.timestamp || new Date().toISOString(),
+        fromEmail,
+        toEmail,
+        studentId: `est-${cert.documentNumber}`,
+        studentName: cert.studentName,
+        documentType: cert.documentType,
+        documentNumber: cert.documentNumber,
+        grade: cert.grade,
+        group: cert.group,
+        mesaNumber: cert.mesaNumber,
+        verificationHash: cert.verificationHash,
+        certificate: cert,
+        status: 'ENTREGADO',
+        read: false,
+        subject: `Certificado Electoral de Sufragio - Folio ${cert.folioNumber} - ${cert.studentName} (${cert.grade})`
+      };
+      setSuperadminInbox(prev => [fallbackMsg, ...prev.filter(m => m.folioNumber !== cert.folioNumber)]);
+      return { success: true, message: `Certificado despachado desde ${fromEmail} a la Bandeja del Superadministrador (${toEmail}).` };
+    }
+  };
+
+  // Mark inbox message as read
+  const markInboxMessageRead = async (id: string) => {
+    setSuperadminInbox(prev => prev.map(m => (m.id === id ? { ...m, read: true } : m)));
+    try {
+      await fetch('/api/election/mark-inbox-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+    } catch {}
+  };
+
   const resetElectionData = () => {
     setStudents(INITIAL_STUDENTS.map(s => ({ ...s, hasVoted: false, votedAt: undefined, receiptFolio: undefined })));
     setVotes([]);
+    setSuperadminInbox([]);
     setActiveVoter(null);
     setLatestCertificate(null);
     setConfig(INITIAL_CONFIG);
@@ -1918,6 +2043,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         logoutJurado,
         syncWithGoogleSheets,
         sendCertificateByEmail,
+        superadminInbox,
+        markInboxMessageRead,
+        sendCertificateToSuperadmin,
         resetElectionData,
         addAuditLog
       }}

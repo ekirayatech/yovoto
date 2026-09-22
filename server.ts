@@ -13,11 +13,13 @@ import {
   AdminMember,
   AuditLog,
   Candidate,
+  CertificateInboxMessage,
   ElectionConfig,
   EncryptedVote,
   JuradoMember,
   Position,
-  Student
+  Student,
+  VotingCertificate
 } from './src/types/election';
 
 const app = express();
@@ -33,6 +35,7 @@ let serverStudents: Student[] = [...INITIAL_STUDENTS];
 let serverJurados: JuradoMember[] = [...INITIAL_JURADOS];
 let serverAdmins: AdminMember[] = [...INITIAL_ADMINS];
 let serverVotes: EncryptedVote[] = [];
+let serverSuperadminInbox: CertificateInboxMessage[] = [];
 
 // Generate seed votes for initially voted students
 function generateInitialServerVotes(): EncryptedVote[] {
@@ -74,6 +77,58 @@ function generateInitialServerVotes(): EncryptedVote[] {
 }
 
 serverVotes = generateInitialServerVotes();
+
+// Generate initial Superadmin Inbox messages for students who already voted
+function generateInitialServerInbox(): CertificateInboxMessage[] {
+  const votedStudents = serverStudents.filter(s => s.hasVoted);
+  return votedStudents.map((student, idx) => {
+    const timestamp = student.votedAt || '2026-09-17T08:35:00.000Z';
+    const folioNumber = student.receiptFolio || `CE-20260917-M${String(student.mesaNumber).padStart(2, '0')}-${student.documentNumber.slice(-4)}${String(idx + 1).padStart(3, '0')}`;
+    const fromEmail = serverConfig.institutionEmail || 'rectoria@ekiraya.edu.co';
+    const toEmail = serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
+    const verificationHash = `04a1f87cb60c1598f80470b4ba7130da4b54e790a6ea51f04494c6f37648${String(idx + 10).padStart(4, '0')}`;
+
+    const cert: VotingCertificate = {
+      folioNumber,
+      studentName: student.fullName,
+      documentType: student.documentType,
+      documentNumber: student.documentNumber,
+      grade: student.grade,
+      group: student.group,
+      mesaNumber: student.mesaNumber,
+      studentEmail: student.email,
+      timestamp,
+      verificationHash,
+      schoolName: serverConfig.institutionName,
+      daneCode: serverConfig.daneCode,
+      rectorName: serverConfig.rectorName,
+      fromEmail,
+      sentToSuperadminAt: timestamp
+    };
+
+    return {
+      id: `inbox-${student.id}-${idx + 1}`,
+      folioNumber,
+      timestamp,
+      fromEmail,
+      toEmail,
+      studentId: student.id,
+      studentName: student.fullName,
+      documentType: student.documentType,
+      documentNumber: student.documentNumber,
+      grade: student.grade,
+      group: student.group,
+      mesaNumber: student.mesaNumber,
+      verificationHash,
+      certificate: cert,
+      status: 'ENTREGADO',
+      read: idx > 1,
+      subject: `Certificado Electoral de Sufragio - Folio ${folioNumber} - ${student.fullName} (${student.grade} - ${student.group})`
+    };
+  });
+}
+
+serverSuperadminInbox = generateInitialServerInbox();
 
 let serverAuditLogs: AuditLog[] = [
   {
@@ -192,6 +247,7 @@ app.get('/api/election/state', (req: Request, res: Response) => {
     admins: serverAdmins,
     votes: serverVotes,
     auditLogs: serverAuditLogs,
+    superadminInbox: serverSuperadminInbox,
     terminalsCount: Math.max(1, activeTerminals.size),
     terminals: Array.from(activeTerminals.values())
   });
@@ -279,21 +335,85 @@ app.post('/api/election/vote', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
-  // Broadcast the vote event to ALL connected computers immediately
+  // Automatic institutional email dispatch to Superadministrator's inbox
+  const fromEmail = serverConfig.institutionEmail || 'rectoria@ekiraya.edu.co';
+  const toEmail = serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
+  const verificationHash = `${lastHash.slice(0, 16)}-M${student.mesaNumber}-${student.documentNumber}`;
+
+  const cert: VotingCertificate = {
+    folioNumber,
+    studentName: student.fullName,
+    documentType: student.documentType,
+    documentNumber: student.documentNumber,
+    grade: student.grade,
+    group: student.group,
+    mesaNumber: student.mesaNumber,
+    studentEmail: student.email,
+    timestamp,
+    verificationHash,
+    schoolName: serverConfig.institutionName,
+    daneCode: serverConfig.daneCode,
+    rectorName: serverConfig.rectorName,
+    fromEmail,
+    sentToSuperadminAt: timestamp
+  };
+
+  const inboxMsg: CertificateInboxMessage = {
+    id: `inbox-cert-${Date.now()}`,
+    folioNumber,
+    timestamp,
+    fromEmail,
+    toEmail,
+    studentId: student.id,
+    studentName: student.fullName,
+    documentType: student.documentType,
+    documentNumber: student.documentNumber,
+    grade: student.grade,
+    group: student.group,
+    mesaNumber: student.mesaNumber,
+    verificationHash,
+    certificate: cert,
+    status: 'ENTREGADO',
+    read: false,
+    subject: `Certificado Electoral de Sufragio - Folio ${folioNumber} - ${student.fullName} (${student.grade} - ${student.group})`
+  };
+
+  serverSuperadminInbox = [inboxMsg, ...serverSuperadminInbox];
+
+  const emailLog: AuditLog = {
+    id: `log-mail-${Date.now()}`,
+    timestamp,
+    action: 'ACTA_GENERADA',
+    actorType: 'SISTEMA',
+    actorName: 'Servicio Institucional de Correo Ekirayá',
+    mesaNumber: student.mesaNumber,
+    details: `Certificado Folio ${folioNumber} remitido desde ${fromEmail} a la Bandeja del Superadministrador (${toEmail}) para ${student.fullName}`,
+    hash: Math.random().toString(36).substr(2, 12),
+    status: 'VERIFICADO'
+  };
+  serverAuditLogs = [emailLog, ...serverAuditLogs];
+
+  // Broadcast the vote event and certificate delivery to ALL connected computers immediately
   broadcast('vote_cast', {
     studentId,
     mesaNumber: student.mesaNumber,
     newVotes: newVotesToAdd,
     updatedStudent,
     newLog,
-    totalVotes: serverVotes.length
+    totalVotes: serverVotes.length,
+    certificate: cert,
+    inboxMessage: inboxMsg
   });
+
+  broadcast('certificate_inbox_received', { inboxMessage: inboxMsg, log: emailLog });
 
   res.json({
     success: true,
     folioNumber,
     timestamp,
-    student: updatedStudent
+    student: updatedStudent,
+    certificate: cert,
+    inboxMessage: inboxMsg
   });
 });
 
@@ -364,6 +484,92 @@ app.post('/api/election/send-certificate-email', (req: Request, res: Response) =
     message: `Certificado enviado con éxito a ${email}`,
     timestamp
   });
+});
+
+// API: Get superadmin certificate inbox
+app.get('/api/election/superadmin-inbox', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    inbox: serverSuperadminInbox
+  });
+});
+
+// API: Explicitly send / resend certificate to Superadministrator's inbox
+app.post('/api/election/send-certificate-to-superadmin', (req: Request, res: Response) => {
+  const { cert, fromEmail, toEmail, inboxMsg } = req.body;
+  if (!cert) {
+    res.status(400).json({ success: false, error: 'Certificado requerido.' });
+    return;
+  }
+
+  const sender = fromEmail || serverConfig.institutionEmail || 'rectoria@ekiraya.edu.co';
+  const recipient = toEmail || serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
+  const timestamp = cert.timestamp || new Date().toISOString();
+
+  const msg: CertificateInboxMessage = inboxMsg || {
+    id: `inbox-cert-${Date.now()}`,
+    folioNumber: cert.folioNumber,
+    timestamp,
+    fromEmail: sender,
+    toEmail: recipient,
+    studentId: `est-${cert.documentNumber}`,
+    studentName: cert.studentName,
+    documentType: cert.documentType,
+    documentNumber: cert.documentNumber,
+    grade: cert.grade,
+    group: cert.group,
+    mesaNumber: cert.mesaNumber,
+    verificationHash: cert.verificationHash,
+    certificate: cert,
+    status: 'ENTREGADO',
+    read: false,
+    subject: `Certificado Electoral de Sufragio - Folio ${cert.folioNumber} - ${cert.studentName} (${cert.grade})`
+  };
+
+  // Add to inbox if not already there
+  const existingIdx = serverSuperadminInbox.findIndex(m => m.folioNumber === cert.folioNumber);
+  if (existingIdx >= 0) {
+    serverSuperadminInbox[existingIdx] = msg;
+  } else {
+    serverSuperadminInbox = [msg, ...serverSuperadminInbox];
+  }
+
+  const newLog: AuditLog = {
+    id: `log-superadmin-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    action: 'ACTA_GENERADA',
+    actorType: 'SISTEMA',
+    actorName: 'Servicio Institucional de Correo Ekirayá',
+    mesaNumber: cert.mesaNumber,
+    details: `Certificado Folio ${cert.folioNumber} remitido desde ${sender} a la Bandeja del Superadministrador (${recipient}) para ${cert.studentName}`,
+    hash: Math.random().toString(36).substr(2, 12),
+    status: 'VERIFICADO'
+  };
+  serverAuditLogs = [newLog, ...serverAuditLogs];
+
+  broadcast('certificate_inbox_received', { inboxMessage: msg, log: newLog });
+
+  res.json({
+    success: true,
+    message: `Certificado remitido con éxito desde ${sender} a la Bandeja del Superadministrador (${recipient}).`,
+    inboxMessage: msg
+  });
+});
+
+// API: Mark inbox certificate as read
+app.post('/api/election/mark-inbox-read', (req: Request, res: Response) => {
+  const { id } = req.body;
+  if (!id) {
+    res.status(400).json({ success: false, error: 'ID requerido.' });
+    return;
+  }
+
+  serverSuperadminInbox = serverSuperadminInbox.map(m =>
+    m.id === id ? { ...m, read: true } : m
+  );
+
+  broadcast('inbox_marked_read', { id });
+  res.json({ success: true, id });
 });
 
 // API: Add student to census
@@ -633,6 +839,7 @@ app.post('/api/election/reset', (req: Request, res: Response) => {
     verifiedAt: undefined
   }));
   serverVotes = [];
+  serverSuperadminInbox = [];
   serverConfig = { ...INITIAL_CONFIG };
 
   const newLog: AuditLog = {
@@ -641,7 +848,7 @@ app.post('/api/election/reset', (req: Request, res: Response) => {
     action: 'SISTEMA_INICIO',
     actorType: 'ADMIN',
     actorName: 'Supervisión Electoral',
-    details: 'Reinicio general de la jornada electoral. Urnas restablecidas a cero.',
+    details: 'Reinicio general de la jornada electoral. Urnas restablecidas a cero y bandeja de certificados reiniciada.',
     hash: Math.random().toString(36).substr(2, 12),
     status: 'VERIFICADO'
   };
@@ -651,6 +858,7 @@ app.post('/api/election/reset', (req: Request, res: Response) => {
     students: serverStudents,
     votes: serverVotes,
     config: serverConfig,
+    superadminInbox: serverSuperadminInbox,
     newLog
   });
 

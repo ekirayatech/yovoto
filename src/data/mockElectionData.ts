@@ -1334,7 +1334,9 @@ export const INITIAL_CONFIG: ElectionConfig = {
     tableName: 'voto_ekiraya_audit_vault',
     syncStatus: 'connected'
   },
-  encryptionKeyFingerprint: 'SHA256:4a8b79f8e712a10b45920c8de15c32890fabc4231a'
+  encryptionKeyFingerprint: 'SHA256:4a8b79f8e712a10b45920c8de15c32890fabc4231a',
+  institutionEmail: 'rectoria@ekiraya.edu.co',
+  superadminEmail: 'rectoria@ekiraya.edu.co'
 };
 
 export const INITIAL_JURADOS: JuradoMember[] = [

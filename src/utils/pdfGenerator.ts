@@ -1,131 +1,227 @@
 import jsPDF from 'jspdf';
 import { getStationForMesa, POLLING_STATIONS } from '../data/mockElectionData';
 import { Candidate, ElectionConfig, EncryptedVote, Position, Student, VotingCertificate } from '../types/election';
-import { generateCertificateQRCode } from './crypto';
+import { generateCertificateQRCode, getQRCodeMatrix } from './crypto';
 
 /**
- * Downloads official Certificate of Voting PDF
+ * Renders a crisp, native vector QR Code directly inside jsPDF with zero dependencies or external assets
  */
-export function generateCertificatePDF(cert: VotingCertificate) {
+function drawVectorQRCode(doc: jsPDF, hash: string, x: number, y: number, sizeMm: number) {
+  const matrix = getQRCodeMatrix(hash);
+  const n = matrix.length; // 21
+  const cell = sizeMm / n;
+
+  // Background white box
+  doc.setFillColor(255, 255, 255);
+  doc.rect(x, y, sizeMm, sizeMm, 'F');
+
+  // Draw cells
+  doc.setFillColor(15, 23, 42); // slate-900
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (matrix[r][c]) {
+        doc.rect(x + c * cell, y + r * cell, cell + 0.05, cell + 0.05, 'F');
+      }
+    }
+  }
+
+  // Small center verification shield in purple & white
+  const centerSize = cell * 3.5;
+  const cx = x + sizeMm / 2 - centerSize / 2;
+  const cy = y + sizeMm / 2 - centerSize / 2;
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(cx, cy, centerSize, centerSize, 0.5, 0.5, 'F');
+  doc.setFillColor(126, 34, 206);
+  doc.roundedRect(cx + 0.35, cy + 0.35, centerSize - 0.7, centerSize - 0.7, 0.35, 0.35, 'F');
+}
+
+/**
+ * Downloads official Certificate of Voting PDF with mathematically calibrated coordinates,
+ * ensuring no overlapping text or collisions with inner/outer frames.
+ */
+export function generateCertificatePDF(cert: VotingCertificate, institutionalEmail?: string, superadminEmail?: string) {
   const doc = new jsPDF({
     orientation: 'landscape',
     unit: 'mm',
     format: 'a5'
   });
 
-  const width = doc.internal.pageSize.getWidth();
-  const height = doc.internal.pageSize.getHeight();
+  const width = doc.internal.pageSize.getWidth(); // 210 mm
+  const height = doc.internal.pageSize.getHeight(); // 148 mm
 
-  // Background frame
-  doc.setFillColor(248, 250, 252); // slate-50
+  // 1. Base clean white canvas
+  doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, width, height, 'F');
 
-  // Decorative border with purple
-  doc.setDrawColor(126, 34, 206); // Purple Ekirayá
-  doc.setLineWidth(1.5);
-  doc.rect(8, 8, width - 16, height - 16);
+  // 2. Outer decorative double frames with generous margins
+  // Outer frame: 6 mm from edge
+  doc.setDrawColor(107, 33, 168); // Purple-800
+  doc.setLineWidth(0.9);
+  doc.roundedRect(6, 6, 198, 136, 2.5, 2.5, 'D');
 
-  // Colombian Accent ribbon top
-  doc.setFillColor(250, 204, 21); // Yellow
-  doc.rect(8, 8, width - 16, 4, 'F');
-  doc.setFillColor(126, 34, 206); // Purple Ekirayá
-  doc.rect(8, 12, width - 16, 2, 'F');
-  doc.setFillColor(220, 38, 38); // Red
-  doc.rect(8, 14, width - 16, 2, 'F');
+  // Inner frame: 8.5 mm from edge (leaving 2.5 mm gap between frames)
+  doc.setDrawColor(216, 180, 254); // Purple-300
+  doc.setLineWidth(0.35);
+  doc.roundedRect(8.5, 8.5, 193, 131, 1.8, 1.8, 'D');
 
-  // Institution Header
+  // 3. Colombian & Ekirayá Institutional Top Ribbon (stays strictly inside inner frame)
+  // Gold (Yellow)
+  doc.setFillColor(245, 158, 11);
+  doc.rect(8.5, 8.5, 193, 1.8, 'F');
+  // Ekirayá Purple
+  doc.setFillColor(126, 34, 206);
+  doc.rect(8.5, 10.3, 193, 1.1, 'F');
+  // Red
+  doc.setFillColor(220, 38, 38);
+  doc.rect(8.5, 11.4, 193, 1.0, 'F');
+
+  // 4. Header: Institution & Electoral Authority (y = 17 to 36)
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
+  doc.setFontSize(11);
   doc.setTextColor(15, 23, 42); // slate-900
-  doc.text(cert.schoolName.toUpperCase(), width / 2, 24, { align: 'center' });
+  doc.text((cert.schoolName || 'COLEGIO EKIRAYÁ - CEM').toUpperCase(), 105, 17.5, { align: 'center' });
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`CÓDIGO DANE: ${cert.daneCode}  •  REPÚBLICA DE COLOMBIA`, width / 2, 29, { align: 'center' });
-  doc.text(`PROCESO DEMOCRÁTICO DE GOBIERNO ESCOLAR - AÑO LECTIVO 2026`, width / 2, 33, { align: 'center' });
+  doc.setFontSize(6.8);
+  doc.setTextColor(100, 116, 139); // slate-500
+  doc.text(`CÓDIGO DANE: ${cert.daneCode}  •  REPÚBLICA DE COLOMBIA  •  SECRETARÍA DE EDUCACIÓN`, 105, 21.5, { align: 'center' });
 
-  // Main Title
+  // Central Banner Pill
+  doc.setFillColor(88, 28, 135); // purple-900
+  doc.roundedRect(36, 23.8, 138, 7.2, 1.5, 1.5, 'F');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.setTextColor(126, 34, 206);
-  doc.text('CERTIFICADO ELECTORAL DIGITAL', width / 2, 43, { align: 'center' });
+  doc.setFontSize(9.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('CERTIFICADO ELECTORAL DIGITAL DE SUFRAGIO', 105, 28.8, { align: 'center' });
 
+  // Subtitle / Legal citation
   doc.setFont('helvetica', 'italic');
-  doc.setFontSize(9);
+  doc.setFontSize(6.3);
   doc.setTextColor(71, 85, 105);
-  doc.text('En cumplimiento de la Ley 115 de 1994 y el Decreto 1860 de 1994 (Art. 28 y 29)', width / 2, 48, { align: 'center' });
+  doc.text('Gobierno Escolar 2026  •  Leyes 115/1994 y 1098/2006  •  Decreto 1860/1994 (Arts. 28 y 29)', 105, 34.8, { align: 'center' });
 
-  // Student details box
+  // 5. Central Panels (y = 37.5 to 85.5 -> Height: 48 mm)
+  // Left Panel: Datos del Sufragante y Mesa
+  // x = 11, y = 37.5, w = 142, h = 48
   doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225); // slate-300
+  doc.setLineWidth(0.3);
+  doc.roundedRect(11, 37.5, 142, 48, 1.8, 1.8, 'FD');
+
+  // Header band inside left panel
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(11, 37.5, 142, 6.2, 1.8, 1.8, 'F');
   doc.setDrawColor(226, 232, 240);
-  doc.roundedRect(16, 52, width - 74, 47, 3, 3, 'FD');
+  doc.line(11, 43.7, 153, 43.7);
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
+  doc.setFontSize(7.2);
   doc.setTextColor(15, 23, 42);
-  doc.text('DATOS DEL SUFRAGANTE:', 20, 58);
+  doc.text('CONSTANCIA DE IDENTIFICACIÓN Y DERECHO AL VOTO', 15, 41.8);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(51, 65, 85);
-  doc.text(`Nombre Completo:`, 20, 65);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`${cert.studentName}`, 55, 65);
+  // Rows of student information
+  const xLabel = 15;
+  const xVal = 50;
+  const maxValWidth = 98;
 
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Identificación:`, 20, 72);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`${cert.documentType} N° ${cert.documentNumber}`, 55, 72);
+  // Station info
+  const station = getStationForMesa(cert.mesaNumber);
+  const stationCleanName = station ? station.shortName || station.name : `Puesto Mesa 0${cert.mesaNumber}`;
 
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Grado y Grupo:`, 20, 79);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`${cert.grade} (${cert.group})`, 55, 79);
+  // Institutional email & Superadmin notification
+  const fromEmailStr = cert.fromEmail || institutionalEmail || 'rectoria@ekiraya.edu.co';
+  const superadminEmailStr = superadminEmail || 'rectoria@ekiraya.edu.co';
 
-  if (cert.studentEmail) {
+  // Helper row drawer to avoid any overlap
+  const drawRow = (yPos: number, label: string, val: string, isAccent = false, isSuccess = false) => {
     doc.setFont('helvetica', 'normal');
-    doc.text(`Correo Registrado:`, 20, 86);
+    doc.setFontSize(6.8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(label, xLabel, yPos);
+
     doc.setFont('helvetica', 'bold');
-    doc.text(`${cert.studentEmail}`, 55, 86);
-  }
+    doc.setFontSize(7.2);
+    if (isSuccess) {
+      doc.setTextColor(4, 120, 87); // emerald-700
+    } else if (isAccent) {
+      doc.setTextColor(107, 33, 168); // purple-800
+    } else {
+      doc.setTextColor(15, 23, 42);
+    }
+    const lines = doc.splitTextToSize(val, maxValWidth);
+    doc.text(lines[0] || val, xVal, yPos);
+  };
 
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Mesa de Votación:`, 20, 93);
+  drawRow(48.8, 'Sufragante:', cert.studentName);
+  drawRow(54.2, 'Documento:', `${cert.documentType} N° ${cert.documentNumber}`);
+  drawRow(59.6, 'Grado y Grupo:', `Grado ${cert.grade}   •   Grupo ${cert.group}`);
+  drawRow(65.0, 'Mesa Asignada:', `Mesa N° ${String(cert.mesaNumber).padStart(2, '0')} — ${stationCleanName}`);
+  drawRow(70.4, 'Buzón Alumno:', cert.studentEmail ? cert.studentEmail : 'No asignado (registro presencial en censo)');
+  drawRow(75.8, 'Despacho Institucional:', `Enviado desde ${fromEmailStr} a Bandeja Superadmin (${superadminEmailStr})`, true);
+  drawRow(81.2, 'Estado de Urna:', 'Sufragio Emitido y Sellado Criptográficamente en Urna Central', false, true);
+
+  // Right Panel: Auditoría Criptográfica QR
+  // x = 156, y = 37.5, w = 43, h = 48
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(156, 37.5, 43, 48, 1.8, 1.8, 'FD');
+
+  // Header band inside right panel
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(156, 37.5, 43, 6.2, 1.8, 1.8, 'F');
+  doc.setDrawColor(226, 232, 240);
+  doc.line(156, 43.7, 199, 43.7);
+
   doc.setFont('helvetica', 'bold');
-  const certStation = getStationForMesa(cert.mesaNumber);
-  doc.text(`Mesa N° ${String(cert.mesaNumber).padStart(2, '0')} - ${certStation.name} (${certStation.category})`, 55, 93);
-
-  // QR Code on the right
-  const qrSvgUrl = generateCertificateQRCode(cert.verificationHash);
-  try {
-    doc.addImage(qrSvgUrl, 'SVG', width - 52, 54, 38, 38);
-  } catch {
-    // If SVG addImage is unavailable in target build, render fallback box
-    doc.setFillColor(241, 245, 249);
-    doc.roundedRect(width - 52, 54, 38, 38, 2, 2, 'FD');
-    doc.setFontSize(7);
-    doc.text('QR VERIFICACIÓN', width - 33, 73, { align: 'center' });
-  }
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.setTextColor(100, 116, 139);
-  doc.text('Escanear para validar autenticidad', width - 33, 95, { align: 'center' });
-
-  // Cryptographic Folio box
-  doc.setFillColor(241, 245, 249);
-  doc.roundedRect(16, 102, width - 32, 12, 2, 2, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
+  doc.setFontSize(6.8);
   doc.setTextColor(15, 23, 42);
-  doc.text(`FOLIO ELECTORAL ÚNICO: ${cert.folioNumber}`, 20, 107);
-  doc.setFont('courier', 'normal');
-  doc.setFontSize(6.5);
-  doc.setTextColor(71, 85, 105);
-  doc.text(`HASH SHA-256: ${cert.verificationHash.slice(0, 48)}...`, 20, 111);
+  doc.text('AUDITORÍA QR', 177.5, 41.8, { align: 'center' });
 
-  // Signatures
+  // Native Vector QR Code (25mm x 25mm)
+  drawVectorQRCode(doc, cert.verificationHash, 165, 46.5, 25);
+
+  // QR Validation Subtitle
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.6);
+  doc.setTextColor(100, 116, 139);
+  doc.text('ESCANEAR PARA VALIDAR', 177.5, 75.5, { align: 'center' });
+
+  doc.setFont('courier', 'bold');
+  doc.setFontSize(5.6);
+  doc.setTextColor(107, 33, 168);
+  doc.text('BLOCKCHAIN CEM-2026', 177.5, 78.8, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.0);
+  doc.setTextColor(148, 163, 184);
+  doc.text('Autenticidad Criptográfica', 177.5, 82.0, { align: 'center' });
+
+  // 6. Cryptographic Folio Strip (y = 87.5 to 98.5 -> Height: 11 mm)
+  doc.setFillColor(241, 245, 249); // slate-100
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(11, 87.5, 188, 11, 1.5, 1.5, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.0);
+  doc.setTextColor(15, 23, 42);
+  doc.text('FOLIO ELECTORAL:', 14, 91.8);
+
+  doc.setTextColor(107, 33, 168);
+  doc.text(cert.folioNumber, 44, 91.8);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.0);
+  doc.setTextColor(4, 120, 87);
+  doc.text('DOCUMENTO OFICIAL VÁLIDO PARA BENEFICIOS ACADÉMICOS Y CÍVICOS', 195, 91.8, { align: 'right' });
+
+  doc.setFont('courier', 'normal');
+  doc.setFontSize(5.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`HASH SHA-256: ${cert.verificationHash}`, 14, 95.8);
+
+  // 7. Official Legal Timestamp (y = 102.5)
   const formattedDate = new Date(cert.timestamp).toLocaleString('es-CO', {
     timeZone: 'America/Bogota',
     dateStyle: 'medium',
@@ -133,28 +229,73 @@ export function generateCertificatePDF(cert: VotingCertificate) {
   });
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(6.3);
   doc.setTextColor(100, 116, 139);
-  doc.text(`Fecha y Hora de Sufragio: ${formattedDate} (Hora Legal Colombiana)`, 16, 120);
+  doc.text(`Fecha y Hora de Emisión Legal: ${formattedDate} (Hora Legal Colombiana - UTC-5)  •  Sincronización Autorizada`, 12, 102.5);
 
-  // Signature lines
+  // 8. Signatures Section (y = 106 to 132.5)
+  // Inner frame bottom: y = 139.5. Outer frame bottom: y = 142.
+  // Left: Rector(a)
   doc.setDrawColor(148, 163, 184);
-  doc.line(20, 136, 80, 136);
-  doc.line(width - 80, 136, width - 20, 136);
+  doc.setLineWidth(0.4);
+  doc.line(22, 119.5, 82, 119.5);
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
+  doc.setFontSize(7.0);
   doc.setTextColor(15, 23, 42);
-  doc.text(cert.rectorName, 50, 140, { align: 'center' });
+  doc.text(cert.rectorName || 'Dra. Patricia Elena Montoya Gómez', 52, 123.5, { align: 'center' });
+
   doc.setFont('helvetica', 'normal');
-  doc.text('Rector(a) y Presidente Claveros', 50, 143, { align: 'center' });
+  doc.setFontSize(5.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Rector(a) y Presidente Claveros', 52, 126.8, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.2);
+  doc.setTextColor(148, 163, 184);
+  doc.text('Colegio Ekirayá - CEM', 52, 129.8, { align: 'center' });
+
+  // Center: Institutional Stamp
+  doc.setDrawColor(216, 180, 254);
+  doc.setFillColor(250, 245, 255);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(93, 113.5, 24, 16, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'bold');
-  doc.text('JURADO DE MESA N° 0' + cert.mesaNumber, width - 50, 140, { align: 'center' });
+  doc.setFontSize(5.4);
+  doc.setTextColor(107, 33, 168);
+  doc.text('SELLO OFICIAL', 105, 118.0, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(4.8);
+  doc.setTextColor(51, 65, 85);
+  doc.text('GOBIERNO ESCOLAR', 105, 121.5, { align: 'center' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(5.0);
+  doc.setTextColor(126, 34, 206);
+  doc.text('CEM 2026', 105, 125.0, { align: 'center' });
+
+  // Right: Jurado de Mesa
+  doc.line(128, 119.5, 188, 119.5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.0);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`JURADO DE MESA N° ${String(cert.mesaNumber).padStart(2, '0')}`, 158, 123.5, { align: 'center' });
+
   doc.setFont('helvetica', 'normal');
-  doc.text('Comité de Democracia y Votaciones', width - 50, 143, { align: 'center' });
+  doc.setFontSize(5.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Comité de Democracia y Veeduría Estudiantil', 158, 126.8, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.2);
+  doc.setTextColor(148, 163, 184);
+  doc.text('Voto Secreto, Personal y Universal', 158, 129.8, { align: 'center' });
 
   doc.save(`Certificado_Votacion_${cert.documentNumber}_${cert.grade}.pdf`);
+  return doc;
 }
 
 /**
