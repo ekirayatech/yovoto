@@ -31,7 +31,7 @@ import {
   Users,
   Zap
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useElection } from '../../context/ElectionContext';
 import {
   diagnoseScriptUrl,
@@ -79,6 +79,18 @@ export const IntegrationsTab: React.FC = () => {
   const [scriptUrl, setScriptUrl] = useState<string>(config.googleSheets.scriptUrl);
   const [sheetId, setSheetId] = useState<string>(config.googleSheets.sheetId);
   const [autoSync, setAutoSync] = useState<boolean>(config.googleSheets.autoSync);
+
+  useEffect(() => {
+    if (config.googleSheets?.scriptUrl) {
+      setScriptUrl(config.googleSheets.scriptUrl);
+    }
+    if (config.googleSheets?.sheetId) {
+      setSheetId(config.googleSheets.sheetId);
+    }
+    if (config.googleSheets?.autoSync !== undefined) {
+      setAutoSync(config.googleSheets.autoSync);
+    }
+  }, [config.googleSheets?.scriptUrl, config.googleSheets?.sheetId, config.googleSheets?.autoSync]);
 
   // 4 Databases Verification & Interactive Testing state
   const [loadingTable, setLoadingTable] = useState<string | null>(null);
@@ -1087,9 +1099,15 @@ function respondJSON(obj) {
             <form onSubmit={handleSaveSheetsConfig} className="space-y-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block font-bold text-slate-800 mb-1">
-                    URL de la Aplicación Web (Google Apps Script Webhook)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-bold text-slate-800">
+                      URL de la Aplicación Web (Google Apps Script Webhook)
+                    </label>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      Fija en todos los dispositivos
+                    </span>
+                  </div>
                   <input
                     type="url"
                     value={scriptUrl}
@@ -1099,7 +1117,7 @@ function respondJSON(obj) {
                     required
                   />
                   <span className="text-[10px] text-slate-500 mt-1 block">
-                    URL obtenida al hacer "Nueva implementación" tipo "Aplicación web" con acceso "Cualquiera".
+                    URL oficial configurada para todo el censo. Al abrir la app en cualquier otro computador o dispositivo, cargará de una vez sincronizada con esta hoja central.
                   </span>
                 </div>
 

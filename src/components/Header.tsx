@@ -7,6 +7,7 @@ import {
   LogOut,
   Radio,
   Scale,
+  Search,
   ShieldCheck,
   UserCheck,
   Users,
@@ -190,9 +191,23 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
             {/* Role Switcher Pill Group */}
             <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200 shrink-0">
               <button
+                id="role-btn-consulta"
+                onClick={() => handleRoleChange('CONSULTA')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  currentRole === 'CONSULTA'
+                    ? 'bg-amber-400 text-slate-950 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+                title="Consultar Lugar y Mesa de Votación del Estudiante"
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>Consultar Puesto</span>
+              </button>
+
+              <button
                 id="role-btn-votante"
                 onClick={() => handleRoleChange('VOTANTE')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   currentRole === 'VOTANTE'
                     ? 'bg-purple-700 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'

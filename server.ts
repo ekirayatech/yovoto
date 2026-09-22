@@ -34,8 +34,19 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const BACKUP_FILE = path.join(DATA_DIR, 'election_cloud_backup.json');
 const SNAPSHOTS_FILE = path.join(DATA_DIR, 'snapshots_history.json');
 
+// URL Fija Oficial de Google Apps Script para Colegio Ekirayá - CEM
+export const FIXED_OFFICIAL_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbzK2vgE7BiggCHsWkttEg8_iGEDYNCT1jVYpJvyLgFoNqYz15yhc0Deq0FLOMNeQnv0/exec';
+
 // Authoritative Election State held on server
-let serverConfig: ElectionConfig = { ...INITIAL_CONFIG };
+let serverConfig: ElectionConfig = {
+  ...INITIAL_CONFIG,
+  googleSheets: {
+    ...INITIAL_CONFIG.googleSheets,
+    enabled: true,
+    scriptUrl: FIXED_OFFICIAL_SHEETS_URL,
+    autoSync: true
+  }
+};
 let serverPositions: Position[] = [...INITIAL_POSITIONS];
 let serverCandidates: Candidate[] = [...INITIAL_CANDIDATES];
 let serverStudents: Student[] = [...INITIAL_STUDENTS];
@@ -130,7 +141,26 @@ function loadStateFromCloudBackup() {
     if (fs.existsSync(BACKUP_FILE)) {
       const raw = fs.readFileSync(BACKUP_FILE, 'utf-8');
       const data = JSON.parse(raw);
-      if (data.config) serverConfig = { ...serverConfig, ...data.config };
+      if (data.config) {
+        serverConfig = {
+          ...serverConfig,
+          ...data.config,
+          googleSheets: {
+            ...serverConfig.googleSheets,
+            ...(data.config.googleSheets || {}),
+            enabled: true,
+            scriptUrl: FIXED_OFFICIAL_SHEETS_URL,
+            autoSync: true
+          }
+        };
+      } else {
+        serverConfig.googleSheets = {
+          ...serverConfig.googleSheets,
+          enabled: true,
+          scriptUrl: FIXED_OFFICIAL_SHEETS_URL,
+          autoSync: true
+        };
+      }
       if (Array.isArray(data.positions) && data.positions.length > 0) serverPositions = data.positions;
       if (Array.isArray(data.candidates) && data.candidates.length > 0) serverCandidates = data.candidates;
       if (Array.isArray(data.students) && data.students.length > 0) serverStudents = data.students;
@@ -291,7 +321,7 @@ async function recordVoteToGoogleSheets(
   folioNumber: string,
   timestamp: string
 ) {
-  const scriptUrl = serverConfig.googleSheets?.scriptUrl;
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
   if (!scriptUrl) return;
 
   const payload = {
@@ -354,7 +384,7 @@ async function recordVoteToGoogleSheets(
 // Background queue flusher for Google Sheets
 setInterval(async () => {
   if (sheetsPendingQueue.length === 0) return;
-  const scriptUrl = serverConfig.googleSheets?.scriptUrl;
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
   if (!scriptUrl) return;
 
   const item = sheetsPendingQueue[0];
@@ -1261,7 +1291,7 @@ app.get('/api/election/sheets-status', (req: Request, res: Response) => {
 
 // API: Full Batch Sync to Unified Google Sheet from Server
 app.post('/api/election/sheets-sync-full', async (req: Request, res: Response) => {
-  const scriptUrl = serverConfig.googleSheets?.scriptUrl;
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
   if (!scriptUrl) {
     res.status(400).json({
       success: false,

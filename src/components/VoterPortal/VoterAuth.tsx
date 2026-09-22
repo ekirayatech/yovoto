@@ -12,6 +12,7 @@ import {
   Lock,
   MapPin,
   RefreshCw,
+  Search,
   ShieldCheck,
   Sparkles,
   UserCheck
@@ -22,7 +23,7 @@ import { getStationForMesa, POLLING_STATIONS } from '../../data/mockElectionData
 import { DocumentType, Student } from '../../types/election';
 
 export const VoterAuth: React.FC = () => {
-  const { authenticateStudent, students, config, loadTableFromSheets } = useElection();
+  const { authenticateStudent, students, config, loadTableFromSheets, setCurrentRole } = useElection();
   const [docType, setDocType] = useState<DocumentType>('TI');
   const [docNumber, setDocNumber] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -133,6 +134,27 @@ export const VoterAuth: React.FC = () => {
             Voto Ciego y Desvinculado
           </span>
         </div>
+      </div>
+
+      {/* Consultar Puesto Callout Banner */}
+      <div className="mb-6 p-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/90 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-2xs">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-amber-400 text-slate-950 rounded-xl font-bold shrink-0">
+            <Search className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="font-extrabold text-amber-950 text-xs sm:text-sm">¿No sabes en qué mesa o taller te corresponde votar?</div>
+            <div className="text-[11px] text-amber-900 mt-0.5">Consulta tu puesto, aula asignada y estado en el censo con tu documento.</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCurrentRole('CONSULTA')}
+          className="w-full sm:w-auto px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-amber-300 font-bold rounded-xl text-xs transition-colors shrink-0 shadow-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
+        >
+          <span>Consultar Puesto</span>
+          <ChevronRight className="w-3.5 h-3.5 text-amber-400" />
+        </button>
       </div>
 
       {/* Main Auth Form Card */}

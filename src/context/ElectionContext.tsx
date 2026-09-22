@@ -261,7 +261,19 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [config, setConfig] = useState<ElectionConfig>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CONFIG);
-      return saved ? JSON.parse(saved) : INITIAL_CONFIG;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!parsed.googleSheets?.scriptUrl || parsed.googleSheets.scriptUrl.includes('voto_ekiraya')) {
+          parsed.googleSheets = {
+            ...parsed.googleSheets,
+            enabled: true,
+            scriptUrl: INITIAL_CONFIG.googleSheets.scriptUrl,
+            autoSync: true
+          };
+        }
+        return parsed;
+      }
+      return INITIAL_CONFIG;
     } catch {
       return INITIAL_CONFIG;
     }
@@ -412,9 +424,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Unified Google Sheets Real-time Sync Status
   const [sheetsSyncInfo, setSheetsSyncInfo] = useState<SheetsSyncStatusInfo>({
-    isConnected: false,
-    scriptUrl: '',
-    sheetId: '',
+    isConnected: true,
+    scriptUrl: INITIAL_CONFIG.googleSheets.scriptUrl,
+    sheetId: INITIAL_CONFIG.googleSheets.sheetId,
     autoSync: true,
     status: 'idle',
     pendingQueueCount: 0,
@@ -567,6 +579,27 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (data.terminalsCount) setConnectedComputersCount(data.terminalsCount);
         if (data.terminals) setTerminalsList(data.terminals);
         setIsMultiComputerLive(true);
+      }
+
+      // Query server sheets status for unified live synchronization on all computers
+      try {
+        const sheetsRes = await fetch('/api/election/sheets-status');
+        if (sheetsRes.ok) {
+          const sData = await sheetsRes.json();
+          setSheetsSyncInfo(prev => ({
+            ...prev,
+            isConnected: sData.isConnected ?? true,
+            scriptUrl: sData.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl,
+            sheetId: sData.sheetId || INITIAL_CONFIG.googleSheets.sheetId,
+            autoSync: sData.autoSync ?? true,
+            lastSyncTime: sData.lastSyncTime || prev.lastSyncTime,
+            status: sData.status || prev.status,
+            pendingQueueCount: sData.pendingQueueCount !== undefined ? sData.pendingQueueCount : prev.pendingQueueCount,
+            totalSyncedVotes: sData.totalSyncedVotes !== undefined ? sData.totalSyncedVotes : prev.totalSyncedVotes
+          }));
+        }
+      } catch {
+        // Fallback silently if offline
       }
     } catch (err) {
       console.warn('Servidor central no alcanzable o en modo offline:', err);

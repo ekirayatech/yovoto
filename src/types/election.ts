@@ -164,7 +164,7 @@ export interface ElectionConfig {
   superadminEmail?: string;
 }
 
-export type AppRole = 'VOTANTE' | 'JURADO' | 'ADMIN';
+export type AppRole = 'VOTANTE' | 'CONSULTA' | 'JURADO' | 'ADMIN';
 
 export interface JuradoMember {
   id: string;

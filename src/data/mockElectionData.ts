@@ -1321,7 +1321,7 @@ export const INITIAL_CONFIG: ElectionConfig = {
   pollingStations: POLLING_STATIONS,
   googleSheets: {
     enabled: true,
-    scriptUrl: 'https://script.google.com/macros/s/AKfycbz_voto_ekiraya/exec',
+    scriptUrl: 'https://script.google.com/macros/s/AKfycbzK2vgE7BiggCHsWkttEg8_iGEDYNCT1jVYpJvyLgFoNqYz15yhc0Deq0FLOMNeQnv0/exec',
     sheetId: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms',
     autoSync: true,
     lastSyncTime: '2026-09-17T09:12:00.000Z',

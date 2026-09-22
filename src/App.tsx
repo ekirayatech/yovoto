@@ -18,6 +18,7 @@ import { BallotBox } from './components/VoterPortal/BallotBox';
 import { VoteConfirmationModal } from './components/VoterPortal/VoteConfirmationModal';
 import { VoterAuth } from './components/VoterPortal/VoterAuth';
 import { VotingCertificateModal } from './components/VoterPortal/VotingCertificateModal';
+import { ConsultarPuestoPage } from './components/VoterPortal/ConsultarPuestoPage';
 import { ElectionProvider, useElection } from './context/ElectionContext';
 
 function MainLayout() {
@@ -81,6 +82,10 @@ function MainLayout() {
               />
             )}
           </>
+        )}
+
+        {currentRole === 'CONSULTA' && (
+          <ConsultarPuestoPage />
         )}
 
         {currentRole === 'JURADO' && (
