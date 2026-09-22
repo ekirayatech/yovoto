@@ -34,7 +34,8 @@ export const CloudBackupModal: React.FC = () => {
     forceServerSheetsSync,
     votes,
     students,
-    config
+    config,
+    isAdminAuthenticated
   } = useElection();
 
   const [activeTab, setActiveTab] = useState<'backup' | 'sheets' | 'history'>('backup');
@@ -43,7 +44,7 @@ export const CloudBackupModal: React.FC = () => {
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  if (!isCloudBackupModalOpen) return null;
+  if (!isCloudBackupModalOpen || !isAdminAuthenticated) return null;
 
   const handleCreateSnapshot = async () => {
     setIsProcessing(true);

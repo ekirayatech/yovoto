@@ -70,10 +70,10 @@ export const VoterAuth: React.FC = () => {
       if (res.success) {
         setSyncNotice(`¡Censo sincronizado con éxito! (${res.count ?? students.length} votantes registrados)`);
       } else {
-        setErrorMsg(res.message || 'No fue posible sincronizar el censo desde Google Sheets.');
+        setErrorMsg(res.message || 'No fue posible sincronizar el censo electoral.');
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Error de comunicación con Google Sheets.');
+      setErrorMsg(err.message || 'Error al comunicar con la base de datos electoral.');
     } finally {
       setIsSyncingCensus(false);
     }
@@ -215,18 +215,13 @@ export const VoterAuth: React.FC = () => {
             </p>
           </div>
 
-          {/* Google Sheets Census Status & Quick Refresh */}
+          {/* Census Status & Refresh */}
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-slate-700 font-medium">
-                Censo oficial: <strong className="text-slate-900">{students.length}</strong> estudiantes
+                Censo oficial habilitado: <strong className="text-slate-900">{students.length}</strong> estudiantes
               </span>
-              {config.googleSheets?.scriptUrl && !config.googleSheets.scriptUrl.includes('voto_ekiraya') && (
-                <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                  Sheets En Línea
-                </span>
-              )}
             </div>
 
             <button
@@ -237,7 +232,7 @@ export const VoterAuth: React.FC = () => {
               className="inline-flex items-center gap-1.5 text-[11px] font-bold text-purple-700 hover:text-purple-900 hover:underline cursor-pointer disabled:opacity-50"
             >
               <RefreshCw className={`w-3 h-3 ${isSyncingCensus ? 'animate-spin text-purple-700' : ''}`} />
-              <span>{isSyncingCensus ? 'Sincronizando...' : 'Actualizar Censo'}</span>
+              <span>{isSyncingCensus ? 'Actualizando...' : 'Actualizar Censo'}</span>
             </button>
           </div>
 
@@ -267,7 +262,7 @@ export const VoterAuth: React.FC = () => {
               {/* Quick action to refresh census if document was not recognized */}
               {errorMsg.includes('censo') && (
                 <div className="pt-2 border-t border-red-200/60 flex items-center justify-between text-[11px]">
-                  <span className="text-red-700">¿El estudiante fue añadido recientemente en Google Sheets?</span>
+                  <span className="text-red-700">¿El estudiante fue añadido recientemente al censo electoral?</span>
                   <button
                     type="button"
                     onClick={handleManualSync}

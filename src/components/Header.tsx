@@ -163,19 +163,21 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
               <span className={`w-1.5 h-1.5 rounded-full ${isMultiComputerLive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
             </button>
 
-            {/* Cloud Backup & Google Sheets Button */}
-            <button
-              id="btn-cloud-backup"
-              onClick={() => setIsCloudBackupModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-sky-900 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors shrink-0 shadow-2xs cursor-pointer"
-              title="Respaldo en la nube y sincronización con Google Sheets"
-            >
-              <Cloud className="w-3.5 h-3.5 text-sky-700" />
-              <span className="hidden sm:inline">Nube & Sheets</span>
-              {sheetsSyncInfo.status === 'success' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              )}
-            </button>
+            {/* Cloud Backup & Google Sheets Button - Exclusivo para Administrador */}
+            {isAdminAuthenticated && (
+              <button
+                id="btn-cloud-backup"
+                onClick={() => setIsCloudBackupModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-sky-900 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors shrink-0 shadow-2xs cursor-pointer"
+                title="Respaldo en la nube y sincronización con Google Sheets (Acceso Administrativo)"
+              >
+                <Cloud className="w-3.5 h-3.5 text-sky-700" />
+                <span className="hidden sm:inline">Nube & Sheets</span>
+                {sheetsSyncInfo.status === 'success' && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                )}
+              </button>
+            )}
 
             {/* Normative Button */}
             <button
