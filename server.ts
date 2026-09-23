@@ -9,7 +9,8 @@ import {
   INITIAL_CONFIG,
   INITIAL_JURADOS,
   INITIAL_POSITIONS,
-  INITIAL_STUDENTS
+  INITIAL_STUDENTS,
+  POLLING_STATIONS
 } from './src/data/mockElectionData';
 import {
   AdminMember,
@@ -1443,7 +1444,7 @@ app.post('/api/election/sheets-record-results', async (req: Request, res: Respon
     const newLog: AuditLog = {
       id: `log-${Date.now()}`,
       timestamp: now,
-      action: 'RESULTADOS_REGISTRADOS_SHEETS',
+      action: 'SYNC_SHEETS',
       actorType: 'ADMIN',
       actorName: 'Administrador Electoral',
       details: `Resultados oficiales consolidados y registrados en Google Sheets (${serverVotes.length} votos, ${totalVotaron} sufragantes, ${resultsByPosition.length} cargos).`,

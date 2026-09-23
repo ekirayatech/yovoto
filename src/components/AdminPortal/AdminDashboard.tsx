@@ -17,6 +17,7 @@ import {
   Scale,
   Settings,
   ShieldCheck,
+  TrendingUp,
   UploadCloud,
   UserCheck,
   Users
@@ -34,8 +35,9 @@ import { LiveResultsTab } from './LiveResultsTab';
 import { OfficialActasTab } from './OfficialActasTab';
 import { SuperadminInboxTab } from './SuperadminInboxTab';
 import { UnifiedSheetsImportModal } from './UnifiedSheetsImportModal';
+import { VoterAnalyticsTab } from './VoterAnalyticsTab';
 
-type AdminTab = 'results' | 'inbox' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'integrations';
+type AdminTab = 'results' | 'analytics' | 'inbox' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'integrations';
 
 export const AdminDashboard: React.FC = () => {
   const { config, updateElectionStatus, resetElectionData, students, votes, superadminInbox } = useElection();
@@ -148,6 +150,7 @@ export const AdminDashboard: React.FC = () => {
         <div className="flex items-center gap-1.5 mt-6 pt-5 border-t border-slate-100 overflow-x-auto pb-1">
           {[
             { id: 'results', label: 'Resultados en Vivo', icon: BarChart3 },
+            { id: 'analytics', label: 'Voter Analytics', icon: TrendingUp },
             { id: 'inbox', label: 'Bandeja Certificados', icon: Inbox, badge: unreadCertificates > 0 ? unreadCertificates : undefined },
             { id: 'actas', label: 'Actas Oficiales (E-14 / E-24)', icon: FileText },
             { id: 'census', label: 'Censo Estudiantil', icon: Users },
@@ -190,6 +193,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Active Tab View */}
       {currentTab === 'results' && <LiveResultsTab />}
+      {currentTab === 'analytics' && <VoterAnalyticsTab />}
       {currentTab === 'inbox' && <SuperadminInboxTab />}
       {currentTab === 'actas' && <OfficialActasTab />}
       {currentTab === 'census' && <CensusManagerTab />}

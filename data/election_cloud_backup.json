@@ -119,8 +119,8 @@
       "scriptUrl": "https://script.google.com/macros/s/AKfycbzK2vgE7BiggCHsWkttEg8_iGEDYNCT1jVYpJvyLgFoNqYz15yhc0Deq0FLOMNeQnv0/exec",
       "sheetId": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms",
       "autoSync": true,
-      "lastSyncTime": "2026-09-17T09:12:00.000Z",
-      "status": "idle"
+      "lastSyncTime": "2026-09-23T19:46:16.459Z",
+      "status": "success"
     },
     "supabase": {
       "enabled": true,
@@ -2268,6 +2268,16 @@
   ],
   "auditLogs": [
     {
+      "id": "log-1790192779151",
+      "timestamp": "2026-09-23T19:46:16.459Z",
+      "action": "SYNC_SHEETS",
+      "actorType": "ADMIN",
+      "actorName": "Administrador Electoral",
+      "details": "Resultados oficiales consolidados y registrados en Google Sheets (76 votos, 19 sufragantes, 4 cargos).",
+      "hash": "gposgmaxcxb",
+      "status": "VERIFICADO"
+    },
+    {
       "id": "log-srv-001",
       "timestamp": "2026-09-17T07:45:00.000Z",
       "action": "SISTEMA_INICIO",
@@ -2945,5 +2955,5 @@
       "subject": "Certificado Electoral de Sufragio - Folio CE-20260917-M20-5E6F77 - Felipe Andrés Jaramillo (11° - 11-B)"
     }
   ],
-  "savedAt": "2026-09-22T17:21:21.136Z"
+  "savedAt": "2026-09-23T19:46:19.151Z"
 }

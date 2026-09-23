@@ -389,7 +389,7 @@ export async function recordResultsToSheets(
   data: {
     institution: string;
     daneCode: string;
-    academicYear: string;
+    academicYear: string | number;
     timestamp?: string;
     summary: Record<string, any>;
     results: any[];
