@@ -119,7 +119,7 @@
       "scriptUrl": "https://script.google.com/macros/s/AKfycbzK2vgE7BiggCHsWkttEg8_iGEDYNCT1jVYpJvyLgFoNqYz15yhc0Deq0FLOMNeQnv0/exec",
       "sheetId": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms",
       "autoSync": true,
-      "lastSyncTime": "2026-09-23T19:46:16.459Z",
+      "lastSyncTime": "2026-09-25T14:15:34.471Z",
       "status": "success"
     },
     "supabase": {
@@ -863,8 +863,10 @@
       "group": "Casa de Niños C",
       "mesaNumber": 1,
       "email": "joaquin.silva@ekiraya.edu.co",
-      "hasVoted": false,
-      "isVerifiedByJurado": true
+      "hasVoted": true,
+      "isVerifiedByJurado": true,
+      "votedAt": "2026-09-25T14:15:37.884Z",
+      "receiptFolio": "CE-20260925-M01-6002WHJX"
     },
     {
       "id": "est-003",
@@ -2265,9 +2267,64 @@
       "timestamp": "2026-09-17T09:12:00.000Z",
       "hash": "0000000000000000-representante_curso-cand-cur-11-01-20",
       "prevHash": "0000000000000000-consejo_directivo-cand-dir-blanco-20"
+    },
+    {
+      "id": "vote-1790345737884-pos-personero",
+      "voteToken": "TOKEN-vkgilr89-2026-09-25T14:15:37.884Z",
+      "positionId": "pos-personero",
+      "candidateId": "cand-01",
+      "mesaNumber": 1,
+      "grade": "Pre-Jardín",
+      "timestamp": "2026-09-25T14:15:37.884Z",
+      "hash": "00000000-pos-personero-cand-01-8y9tip",
+      "prevHash": "0000000000000000-representante_curso-cand-cur-11-01-20"
+    },
+    {
+      "id": "vote-1790345737885-pos-contralor",
+      "voteToken": "TOKEN-wei3r75o-2026-09-25T14:15:37.884Z",
+      "positionId": "pos-contralor",
+      "candidateId": "cand-03",
+      "mesaNumber": 1,
+      "grade": "Pre-Jardín",
+      "timestamp": "2026-09-25T14:15:37.884Z",
+      "hash": "00000000-pos-contralor-cand-03-8k2y3z",
+      "prevHash": "00000000-pos-personero-cand-01-8y9tip"
+    },
+    {
+      "id": "vote-1790345737885-pos-cabildante",
+      "voteToken": "TOKEN-s1yobcha-2026-09-25T14:15:37.884Z",
+      "positionId": "pos-cabildante",
+      "candidateId": "cand-05",
+      "mesaNumber": 1,
+      "grade": "Pre-Jardín",
+      "timestamp": "2026-09-25T14:15:37.884Z",
+      "hash": "00000000-pos-cabildante-cand-05-tecc1j",
+      "prevHash": "00000000-pos-contralor-cand-03-8k2y3z"
     }
   ],
   "auditLogs": [
+    {
+      "id": "log-mail-1790345737885",
+      "timestamp": "2026-09-25T14:15:37.884Z",
+      "action": "ACTA_GENERADA",
+      "actorType": "SISTEMA",
+      "actorName": "Servicio Institucional de Correo Ekirayá",
+      "mesaNumber": 1,
+      "details": "Certificado Folio CE-20260925-M01-6002WHJX remitido desde rectoria@ekiraya.edu.co a la Bandeja del Superadministrador (rectoria@ekiraya.edu.co) para Joaquín Emilio Silva Rivas",
+      "hash": "vicfjlt2p7a",
+      "status": "VERIFICADO"
+    },
+    {
+      "id": "log-1790345737885",
+      "timestamp": "2026-09-25T14:15:37.884Z",
+      "action": "VOTO_EMITIDO",
+      "actorType": "ESTUDIANTE",
+      "actorName": "Sufragante Cifrado",
+      "mesaNumber": 1,
+      "details": "Voto depositado en urna desde terminal terminal-test-20. Folio emitido: CE-20260925-M01-6002WHJX",
+      "hash": "0jpcf2ridx",
+      "status": "VERIFICADO"
+    },
     {
       "id": "log-1790345142883",
       "timestamp": "2026-09-25T14:05:42.883Z",
@@ -2310,6 +2367,41 @@
     }
   ],
   "superadminInbox": [
+    {
+      "id": "inbox-cert-1790345737885",
+      "folioNumber": "CE-20260925-M01-6002WHJX",
+      "timestamp": "2026-09-25T14:15:37.884Z",
+      "fromEmail": "rectoria@ekiraya.edu.co",
+      "toEmail": "rectoria@ekiraya.edu.co",
+      "studentId": "est-002",
+      "studentName": "Joaquín Emilio Silva Rivas",
+      "documentType": "RC",
+      "documentNumber": "1193456002",
+      "grade": "Pre-Jardín",
+      "group": "Casa de Niños C",
+      "mesaNumber": 1,
+      "verificationHash": "00000000-pos-cab-M1-1193456002",
+      "certificate": {
+        "folioNumber": "CE-20260925-M01-6002WHJX",
+        "studentName": "Joaquín Emilio Silva Rivas",
+        "documentType": "RC",
+        "documentNumber": "1193456002",
+        "grade": "Pre-Jardín",
+        "group": "Casa de Niños C",
+        "mesaNumber": 1,
+        "studentEmail": "joaquin.silva@ekiraya.edu.co",
+        "timestamp": "2026-09-25T14:15:37.884Z",
+        "verificationHash": "00000000-pos-cab-M1-1193456002",
+        "schoolName": "Colegio Ekirayá - CEM",
+        "daneCode": "311001859214",
+        "rectorName": "Dra. Patricia Elena Montoya Gómez",
+        "fromEmail": "rectoria@ekiraya.edu.co",
+        "sentToSuperadminAt": "2026-09-25T14:15:37.884Z"
+      },
+      "status": "ENTREGADO",
+      "read": false,
+      "subject": "Certificado Electoral de Sufragio - Folio CE-20260925-M01-6002WHJX - Joaquín Emilio Silva Rivas (Pre-Jardín - Casa de Niños C)"
+    },
     {
       "id": "inbox-est-001-1",
       "folioNumber": "CE-20260917-M01-11A9C2",
@@ -2976,5 +3068,5 @@
       "subject": "Certificado Electoral de Sufragio - Folio CE-20260917-M20-5E6F77 - Felipe Andrés Jaramillo (11° - 11-B)"
     }
   ],
-  "savedAt": "2026-09-25T14:05:42.883Z"
+  "savedAt": "2026-09-25T14:15:37.885Z"
 }

@@ -834,6 +834,18 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           refreshServerState();
         });
 
+        sse.addEventListener('candidates_synced', () => {
+          refreshServerState();
+        });
+
+        sse.addEventListener('jurados_synced', () => {
+          refreshServerState();
+        });
+
+        sse.addEventListener('admins_synced', () => {
+          refreshServerState();
+        });
+
         sse.addEventListener('all_synced', () => {
           refreshServerState();
         });
@@ -1376,12 +1388,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       broadcastChannel.postMessage({ type: 'STATE_REFRESH' });
     }
 
-    // Auto-sync with Google Sheets if configured
-    if (config.googleSheets.enabled && config.googleSheets.autoSync) {
-      setTimeout(() => {
-        syncWithGoogleSheets();
-      }, 500);
-    }
+    // Google Sheets sync is handled authoritatively and centrally by the server on /api/election/vote
 
     return { success: true, certificate };
   };
@@ -1966,6 +1973,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (rawCandidates.length > 0) {
             const normalized = normalizeRawCandidates(rawCandidates);
             setCandidates(normalized);
+            fetch('/api/election/sync-candidates', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ candidates: normalized })
+            }).catch(() => {});
             addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${normalized.length} candidaturas cargadas exitosamente desde Google Sheets.`);
             return { success: true, message: `Se cargaron ${normalized.length} candidatos desde Sheets.`, count: normalized.length, data: normalized };
           }
@@ -1980,6 +1992,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (rawJurados.length > 0) {
             const normalized = normalizeRawJurados(rawJurados);
             setJurados(normalized);
+            fetch('/api/election/sync-jurados', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jurados: normalized })
+            }).catch(() => {});
             addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${normalized.length} jurados acreditados cargados desde Google Sheets.`);
             return { success: true, message: `Se cargaron ${normalized.length} jurados desde Sheets.`, count: normalized.length, data: normalized };
           }
@@ -1994,6 +2011,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (rawAdmins.length > 0) {
             const normalized = normalizeRawAdmins(rawAdmins);
             setAdmins(normalized);
+            fetch('/api/election/sync-admins', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ admins: normalized })
+            }).catch(() => {});
             addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `${normalized.length} administradores cargados desde Google Sheets.`);
             return { success: true, message: `Se cargaron ${normalized.length} administradores desde Sheets.`, count: normalized.length, data: normalized };
           }
@@ -2040,10 +2062,14 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
 
         let anyUpdated = false;
+        let mappedStudentsToSync: Student[] = [];
+        let normCandsToSync: Candidate[] = [];
+        let normJurToSync: JuradoMember[] = [];
+        let normAdmToSync: AdminMember[] = [];
 
         if (finalData.students && finalData.students.length > 0) {
           const rawStudents = finalData.students;
-          const mappedStudents: Student[] = rawStudents.map((s: any, idx: number) => ({
+          mappedStudentsToSync = rawStudents.map((s: any, idx: number) => ({
             id: s.id || `est-sheet-${idx + 1}`,
             documentType: s.documentType || 'TI',
             documentNumber: String(s.documentNumber),
@@ -2057,29 +2083,29 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             receiptFolio: s.receiptFolio,
             isVerifiedByJurado: Boolean(s.hasVoted)
           }));
-          setStudents(mappedStudents);
-          counts.voters = mappedStudents.length;
+          setStudents(mappedStudentsToSync);
+          counts.voters = mappedStudentsToSync.length;
           anyUpdated = true;
         }
 
         if (finalData.candidates && finalData.candidates.length > 0) {
-          const normCands = normalizeRawCandidates(finalData.candidates);
-          setCandidates(normCands);
-          counts.candidates = normCands.length;
+          normCandsToSync = normalizeRawCandidates(finalData.candidates);
+          setCandidates(normCandsToSync);
+          counts.candidates = normCandsToSync.length;
           anyUpdated = true;
         }
 
         if (finalData.jurados && finalData.jurados.length > 0) {
-          const normJur = normalizeRawJurados(finalData.jurados);
-          setJurados(normJur);
-          counts.jurados = normJur.length;
+          normJurToSync = normalizeRawJurados(finalData.jurados);
+          setJurados(normJurToSync);
+          counts.jurados = normJurToSync.length;
           anyUpdated = true;
         }
 
         if (finalData.admins && finalData.admins.length > 0) {
-          const normAdm = normalizeRawAdmins(finalData.admins);
-          setAdmins(normAdm);
-          counts.admins = normAdm.length;
+          normAdmToSync = normalizeRawAdmins(finalData.admins);
+          setAdmins(normAdmToSync);
+          counts.admins = normAdmToSync.length;
           anyUpdated = true;
         }
 
@@ -2088,10 +2114,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              students: finalData.students || [],
-              candidates: finalData.candidates ? normalizeRawCandidates(finalData.candidates) : [],
-              jurados: finalData.jurados ? normalizeRawJurados(finalData.jurados) : [],
-              admins: finalData.admins ? normalizeRawAdmins(finalData.admins) : []
+              students: mappedStudentsToSync,
+              candidates: normCandsToSync,
+              jurados: normJurToSync,
+              admins: normAdmToSync
             })
           }).catch(() => {});
           
@@ -2181,46 +2207,23 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Google Sheets integration (Lectura y Escritura Real)
+  // Google Sheets integration (Lectura y Escritura Real Centralizada)
   const syncWithGoogleSheets = async () => {
-    const scriptUrl = config.googleSheets.scriptUrl;
-    if (!scriptUrl) {
-      return { success: false, rowsSynced: 0, message: 'URL del webhook de Google Sheets no configurada.' };
-    }
-
     setConfig(prev => ({
       ...prev,
       googleSheets: { ...prev.googleSheets, status: 'syncing' }
     }));
+    setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
 
     try {
-      const payload = {
-        action: 'batchSync',
-        votesCount: votes.length,
-        votedStudentsCount: students.filter(s => s.hasVoted).length,
-        votes: votes.map(v => ({
-          voteToken: v.voteToken,
-          positionId: v.positionId,
-          candidateId: v.candidateId,
-          mesaNumber: v.mesaNumber,
-          hash: v.hash,
-          timestamp: v.timestamp
-        })),
-        studentsVoted: students.filter(s => s.hasVoted).map(s => ({
-          documentNumber: s.documentNumber,
-          fullName: s.fullName,
-          grade: s.grade,
-          group: s.group,
-          mesaNumber: s.mesaNumber,
-          votedAt: s.votedAt,
-          receiptFolio: s.receiptFolio
-        }))
-      };
+      const res = await fetch('/api/election/sheets-sync-full', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
 
-      const res = await writeVoteToSheets(scriptUrl, payload);
-
-      if (res.success) {
-        const now = new Date().toISOString();
+      if (res.ok && data.success) {
+        const now = data.lastSyncTime || new Date().toISOString();
         setConfig(prev => ({
           ...prev,
           googleSheets: {
@@ -2229,11 +2232,18 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             lastSyncTime: now
           }
         }));
+        setSheetsSyncInfo(prev => ({
+          ...prev,
+          status: 'success',
+          lastSyncTime: now,
+          totalSyncedVotes: votes.length,
+          pendingQueueCount: 0
+        }));
 
-        addAuditLog('SYNC_SHEETS', 'SISTEMA', 'Google Sheets Conector', `Sincronización exitosa: ${votes.length} votos y censo transmitidos a Google Sheets.`);
-        return { success: true, rowsSynced: votes.length, message: res.message || 'Sincronización con Google Sheets completada.' };
+        addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Sincronización central con Google Sheets completada (${data.rowsSynced || 0} registros sincronizados).`);
+        return { success: true, rowsSynced: data.rowsSynced || 0, message: data.message || 'Sincronización exitosa con Google Sheets.' };
       } else {
-        throw new Error(res.message || 'Error en comunicación con Google Sheets');
+        throw new Error(data.error || 'Error reportado por el servidor al sincronizar con Google Sheets');
       }
     } catch (err: any) {
       setConfig(prev => ({
@@ -2243,6 +2253,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           status: 'error',
           errorMessage: err.message || 'Error al contactar webhook de Google Sheets'
         }
+      }));
+      setSheetsSyncInfo(prev => ({
+        ...prev,
+        status: 'error',
+        lastError: err.message
       }));
       return { success: false, rowsSynced: 0, message: err.message || 'Fallo al sincronizar con Google Sheets.' };
     }

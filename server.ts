@@ -369,6 +369,10 @@ async function recordVoteToGoogleSheets(
       redirect: 'follow'
     });
 
+    if (!res.ok) {
+      throw new Error(`Google Sheets HTTP ${res.status}`);
+    }
+
     serverConfig.googleSheets.lastSyncTime = new Date().toISOString();
     serverConfig.googleSheets.status = 'success';
     totalSyncedVotesCount += newVotes.length;
@@ -888,11 +892,23 @@ app.post('/api/election/mark-inbox-read', (req: Request, res: Response) => {
 // API: Add student to census
 app.post('/api/election/add-student', (req: Request, res: Response) => {
   const newStudentData = req.body;
-  const id = `est-${Date.now()}`;
+  const cleanDoc = String(newStudentData.documentNumber || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase().trim();
+  
+  if (cleanDoc) {
+    const existing = serverStudents.find(s =>
+      String(s.documentNumber).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().trim() === cleanDoc
+    );
+    if (existing) {
+      res.json({ success: true, student: existing, version: serverStateVersion });
+      return;
+    }
+  }
+
+  const id = newStudentData.id || `est-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
   const student: Student = {
     ...newStudentData,
     id,
-    hasVoted: false
+    hasVoted: !!newStudentData.hasVoted
   };
 
   serverStudents = [student, ...serverStudents];
@@ -1058,6 +1074,39 @@ app.post('/api/election/sync-students', (req: Request, res: Response) => {
     broadcast('students_synced', { count: students.length });
   }
   res.json({ success: true, count: serverStudents.length, version: serverStateVersion });
+});
+
+// API: Sync candidates loaded from Google Sheets
+app.post('/api/election/sync-candidates', (req: Request, res: Response) => {
+  const { candidates } = req.body;
+  if (Array.isArray(candidates) && candidates.length > 0) {
+    serverCandidates = candidates;
+    persistStateToCloudBackup(`Sincronización de candidaturas (${candidates.length} candidatos)`);
+    broadcast('candidates_synced', { count: candidates.length });
+  }
+  res.json({ success: true, count: serverCandidates.length, version: serverStateVersion });
+});
+
+// API: Sync jurados loaded from Google Sheets
+app.post('/api/election/sync-jurados', (req: Request, res: Response) => {
+  const { jurados } = req.body;
+  if (Array.isArray(jurados) && jurados.length > 0) {
+    serverJurados = jurados;
+    persistStateToCloudBackup(`Sincronización de jurados (${jurados.length} jurados)`);
+    broadcast('jurados_synced', { count: jurados.length });
+  }
+  res.json({ success: true, count: serverJurados.length, version: serverStateVersion });
+});
+
+// API: Sync admins loaded from Google Sheets
+app.post('/api/election/sync-admins', (req: Request, res: Response) => {
+  const { admins } = req.body;
+  if (Array.isArray(admins) && admins.length > 0) {
+    serverAdmins = admins;
+    persistStateToCloudBackup(`Sincronización de administradores (${admins.length} administradores)`);
+    broadcast('admins_synced', { count: admins.length });
+  }
+  res.json({ success: true, count: serverAdmins.length, version: serverStateVersion });
 });
 
 // API: Sync all 4 databases loaded from Google Sheets
@@ -1365,6 +1414,10 @@ app.post('/api/election/sheets-sync-full', async (req: Request, res: Response) =
       body: JSON.stringify(payload),
       redirect: 'follow'
     });
+
+    if (!response.ok) {
+      throw new Error(`Google Apps Script respondió con HTTP ${response.status}`);
+    }
 
     serverConfig.googleSheets.lastSyncTime = new Date().toISOString();
     serverConfig.googleSheets.status = 'success';

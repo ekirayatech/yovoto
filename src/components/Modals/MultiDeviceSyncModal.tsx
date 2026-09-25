@@ -2,6 +2,7 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Database,
   Laptop,
   Monitor,
   Network,
@@ -32,7 +33,9 @@ export const MultiDeviceSyncModal: React.FC = () => {
     refreshServerState,
     votes,
     students,
-    config
+    config,
+    sheetsSyncInfo,
+    syncWithGoogleSheets
   } = useElection();
 
   const [copiedLink, setCopiedLink] = useState(false);
@@ -40,6 +43,8 @@ export const MultiDeviceSyncModal: React.FC = () => {
   const [selectedRole, setSelectedRole] = useState<AppRole>(currentRole);
   const [selectedMesa, setSelectedMesa] = useState<number>(juradoMesa);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSheetsSyncing, setIsSheetsSyncing] = useState(false);
+  const [sheetsSyncFeedback, setSheetsSyncFeedback] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   if (!isMultiDeviceModalOpen) return null;
@@ -237,6 +242,55 @@ export const MultiDeviceSyncModal: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+
+          {/* Sincronización con Base de Datos Google Sheets */}
+          <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-900 flex items-center gap-1.5">
+                  <Database className="w-4 h-4 text-emerald-700" />
+                  Base de Datos Central en Google Sheets
+                </h4>
+                <div className="flex items-center gap-2 mt-1 flex-wrap text-xs text-emerald-800">
+                  <span className="inline-flex items-center gap-1 font-semibold">
+                    <span className={`w-2 h-2 rounded-full ${sheetsSyncInfo.status === 'success' ? 'bg-emerald-500 animate-pulse' : (sheetsSyncInfo.status === 'syncing' ? 'bg-amber-400 animate-ping' : 'bg-blue-400')}`} />
+                    {sheetsSyncInfo.status === 'success' ? 'Sincronización en Tiempo Real Activa' : (sheetsSyncInfo.status === 'syncing' ? 'Transmitiendo a Sheets...' : 'Conectada')}
+                  </span>
+                  <span>•</span>
+                  <span>Último envío: <strong>{sheetsSyncInfo.lastSyncTime ? new Date(sheetsSyncInfo.lastSyncTime).toLocaleTimeString('es-CO') : 'Al depositar voto'}</strong></span>
+                  <span>•</span>
+                  <span>Votos registrados: <strong>{sheetsSyncInfo.totalSyncedVotes ?? votes.length}</strong></span>
+                </div>
+                {sheetsSyncFeedback && (
+                  <div className="mt-1.5 text-xs text-emerald-900 font-semibold bg-emerald-100/80 px-2 py-0.5 rounded inline-block">
+                    {sheetsSyncFeedback}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={async () => {
+                  setIsSheetsSyncing(true);
+                  setSheetsSyncFeedback(null);
+                  try {
+                    const res = await syncWithGoogleSheets();
+                    setSheetsSyncFeedback(res.message || 'Sincronizado con éxito.');
+                    setTimeout(() => setSheetsSyncFeedback(null), 4000);
+                  } catch (e: any) {
+                    setSheetsSyncFeedback('Error al sincronizar: ' + (e.message || 'Fallo de red'));
+                  } finally {
+                    setIsSheetsSyncing(false);
+                  }
+                }}
+                disabled={isSheetsSyncing}
+                className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all shadow-xs inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                title="Transmite inmediatamente los datos y votos más recientes a la hoja oficial de Google Sheets"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSheetsSyncing ? 'animate-spin' : ''}`} />
+                {isSheetsSyncing ? 'Sincronizando...' : 'Sincronizar Sheets'}
+              </button>
+            </div>
           </div>
 
           {/* List of Connected Terminals */}
