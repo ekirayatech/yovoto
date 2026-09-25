@@ -131,7 +131,8 @@
     },
     "encryptionKeyFingerprint": "SHA256:4a8b79f8e712a10b45920c8de15c32890fabc4231a",
     "institutionEmail": "rectoria@ekiraya.edu.co",
-    "superadminEmail": "rectoria@ekiraya.edu.co"
+    "superadminEmail": "rectoria@ekiraya.edu.co",
+    "closedAt": "2026-09-25T14:05:42.870Z"
   },
   "positions": [
     {
@@ -2268,6 +2269,26 @@
   ],
   "auditLogs": [
     {
+      "id": "log-1790345142883",
+      "timestamp": "2026-09-25T14:05:42.883Z",
+      "action": "APERTURA_MESA",
+      "actorType": "ADMIN",
+      "actorName": "Supervisión Electoral",
+      "details": "Estado de la jornada actualizado a: ABIERTA",
+      "hash": "4fd73b5ec6632ae9350bf2c5b060f2034c1545e08f422d4c6e6a4631106b09fd",
+      "status": "VERIFICADO"
+    },
+    {
+      "id": "log-1790345142870",
+      "timestamp": "2026-09-25T14:05:42.870Z",
+      "action": "CIERRE_MESA",
+      "actorType": "ADMIN",
+      "actorName": "Supervisión Electoral",
+      "details": "Estado de la jornada actualizado a: CERRADA",
+      "hash": "c24ee550562d5cd0b0e5e924f8e0633a0f673c7b8f831c9b1e5001b2531bc851",
+      "status": "VERIFICADO"
+    },
+    {
       "id": "log-1790192779151",
       "timestamp": "2026-09-23T19:46:16.459Z",
       "action": "SYNC_SHEETS",
@@ -2955,5 +2976,5 @@
       "subject": "Certificado Electoral de Sufragio - Folio CE-20260917-M20-5E6F77 - Felipe Andrés Jaramillo (11° - 11-B)"
     }
   ],
-  "savedAt": "2026-09-23T19:46:19.151Z"
+  "savedAt": "2026-09-25T14:05:42.883Z"
 }

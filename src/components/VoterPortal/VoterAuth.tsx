@@ -168,8 +168,8 @@ export const VoterAuth: React.FC = () => {
             <div className="grid grid-cols-4 gap-2">
               {[
                 { type: 'TI', label: 'T.I.', desc: 'Tarjeta Identidad' },
+                { type: 'CC', label: 'C.C.', desc: 'Cédula Ciudadanía' },
                 { type: 'RC', label: 'R.C.', desc: 'Registro Civil' },
-                { type: 'CE', label: 'C.E.', desc: 'Cédula Extranjería' },
                 { type: 'COD', label: 'CÓD', desc: 'Código Escolar' }
               ].map(item => (
                 <button

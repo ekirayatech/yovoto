@@ -288,6 +288,9 @@ let serverAuditLogs: AuditLog[] = [
   }
 ];
 
+// Restore prior authoritative state from disk immediately if available
+loadStateFromCloudBackup();
+
 // Active Terminals (Computers) Tracking
 interface ActiveTerminal {
   id: string;
@@ -303,8 +306,10 @@ const activeTerminals = new Map<string, ActiveTerminal>();
 
 // Connected SSE Clients for real-time live broadcasting to all computers
 const sseClients = new Set<Response>();
+let serverStateVersion = Date.now();
 
 function broadcast(event: string, data: unknown) {
+  serverStateVersion++;
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) {
     try {
@@ -314,6 +319,18 @@ function broadcast(event: string, data: unknown) {
     }
   }
 }
+
+// Heartbeat keep-alive to keep SSE connections open through Cloud Run, proxies, and Wi-Fi NAT
+setInterval(() => {
+  if (sseClients.size === 0) return;
+  for (const client of sseClients) {
+    try {
+      client.write(': keepalive\n\n');
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}, 10000);
 
 // Google Sheets Centralized Dispatch
 async function recordVoteToGoogleSheets(
@@ -444,8 +461,9 @@ app.get('/api/health', (req: Request, res: Response) => {
 // API: SSE Stream for real-time multi-computer sync
 app.get('/api/events', (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
   sseClients.add(res);
@@ -453,6 +471,8 @@ app.get('/api/events', (req: Request, res: Response) => {
   // Send initial connection event
   res.write(`event: connected\ndata: ${JSON.stringify({
     message: 'Conexión multiequipo establecida con éxito',
+    version: serverStateVersion,
+    status: serverConfig.status,
     terminalsCount: Math.max(1, activeTerminals.size),
     sheetsStatus: {
       lastSyncTime: serverConfig.googleSheets?.lastSyncTime,
@@ -506,10 +526,25 @@ app.post('/api/terminal/ping', (req: Request, res: Response) => {
   });
 });
 
+// API: Fast polling sync endpoint for 20+ computer network
+app.get('/api/election/version', (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.json({
+    version: serverStateVersion,
+    status: serverConfig.status,
+    votesCount: serverVotes.length,
+    studentsCount: serverStudents.length,
+    votedCount: serverStudents.filter(s => s.hasVoted).length,
+    terminalsCount: Math.max(1, activeTerminals.size),
+    timestamp: new Date().toISOString()
+  });
+});
 
 // API: Full synchronized state for any computer connecting
 app.get('/api/election/state', (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.json({
+    version: serverStateVersion,
     config: serverConfig,
     positions: serverPositions,
     candidates: serverCandidates,
@@ -723,13 +758,14 @@ app.post('/api/election/verify-student', (req: Request, res: Response) => {
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
   // Broadcast to all computers
+  persistStateToCloudBackup(`Verificación de estudiante ${student.fullName}`);
   broadcast('student_verified', {
     studentId,
     verifiedAt: now,
     newLog
   });
 
-  res.json({ success: true, studentId });
+  res.json({ success: true, studentId, version: serverStateVersion });
 });
 
 // API: Send or log certificate email delivery
@@ -873,8 +909,9 @@ app.post('/api/election/add-student', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
+  persistStateToCloudBackup(`Incorporación de estudiante ${student.fullName}`);
   broadcast('student_added', { student, newLog });
-  res.json({ success: true, student });
+  res.json({ success: true, student, version: serverStateVersion });
 });
 
 // API: Add candidate
@@ -900,8 +937,9 @@ app.post('/api/election/add-candidate', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
+  persistStateToCloudBackup(`Adición de candidato ${candidate.fullName}`);
   broadcast('candidate_added', { candidate, newLog });
-  res.json({ success: true, candidate });
+  res.json({ success: true, candidate, version: serverStateVersion });
 });
 
 // API: Update candidate
@@ -926,8 +964,9 @@ app.post('/api/election/update-candidate', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
+  persistStateToCloudBackup(`Actualización de candidato ${updatedCandidate.fullName}`);
   broadcast('candidate_updated', { candidate: updatedCandidate, newLog });
-  res.json({ success: true, candidate: updatedCandidate });
+  res.json({ success: true, candidate: updatedCandidate, version: serverStateVersion });
 });
 
 // API: Delete candidate
@@ -958,8 +997,9 @@ app.post('/api/election/delete-candidate', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
+  persistStateToCloudBackup(`Eliminación de candidatura ${id}`);
   broadcast('candidate_deleted', { id, newLog });
-  res.json({ success: true, id });
+  res.json({ success: true, id, version: serverStateVersion });
 });
 
 // API: Update election status
@@ -977,17 +1017,18 @@ app.post('/api/election/status', (req: Request, res: Response) => {
   const newLog: AuditLog = {
     id: `log-${Date.now()}`,
     timestamp: now,
-    action: 'APERTURA_MESA',
+    action: status === 'ABIERTA' ? 'APERTURA_MESA' : (status === 'CERRADA' ? 'CIERRE_MESA' : 'SISTEMA_INICIO'),
     actorType: 'ADMIN',
     actorName: 'Supervisión Electoral',
     details: `Estado de la jornada actualizado a: ${status}`,
-    hash: Math.random().toString(36).substr(2, 12),
+    hash: crypto.createHash('sha256').update(`${now}-${status}-${Date.now()}`).digest('hex'),
     status: 'VERIFICADO'
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
+  persistStateToCloudBackup(`Cambio de estado de urna a: ${status}`);
   broadcast('status_changed', { status, config: serverConfig, newLog });
-  res.json({ success: true, status, config: serverConfig });
+  res.json({ success: true, status, config: serverConfig, version: serverStateVersion });
 });
 
 // API: Update election configuration centrally
@@ -1002,9 +1043,10 @@ app.post('/api/election/config', (req: Request, res: Response) => {
         ...(newConfig.googleSheets || {})
       }
     };
+    persistStateToCloudBackup('Actualización de configuración institucional');
     broadcast('config_updated', { config: serverConfig });
   }
-  res.json({ success: true, config: serverConfig });
+  res.json({ success: true, config: serverConfig, version: serverStateVersion });
 });
 
 // API: Sync students census loaded from Google Sheets
@@ -1012,9 +1054,10 @@ app.post('/api/election/sync-students', (req: Request, res: Response) => {
   const { students } = req.body;
   if (Array.isArray(students) && students.length > 0) {
     serverStudents = students;
+    persistStateToCloudBackup(`Sincronización de censo (${students.length} estudiantes)`);
     broadcast('students_synced', { count: students.length });
   }
-  res.json({ success: true, count: serverStudents.length });
+  res.json({ success: true, count: serverStudents.length, version: serverStateVersion });
 });
 
 // API: Sync all 4 databases loaded from Google Sheets
@@ -1034,13 +1077,14 @@ app.post('/api/election/sync-all', (req: Request, res: Response) => {
       }
     };
   }
+  persistStateToCloudBackup('Sincronización total de bases de datos');
   broadcast('all_synced', {
     studentsCount: serverStudents.length,
     candidatesCount: serverCandidates.length,
     juradosCount: serverJurados.length,
     adminsCount: serverAdmins.length
   });
-  res.json({ success: true });
+  res.json({ success: true, version: serverStateVersion });
 });
 
 // API: Proxy Google Sheets Sync (Escritura y Lectura para base de datos)

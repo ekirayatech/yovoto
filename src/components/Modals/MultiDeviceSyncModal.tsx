@@ -31,7 +31,8 @@ export const MultiDeviceSyncModal: React.FC = () => {
     juradoMesa,
     refreshServerState,
     votes,
-    students
+    students,
+    config
   } = useElection();
 
   const [copiedLink, setCopiedLink] = useState(false);
@@ -126,7 +127,7 @@ export const MultiDeviceSyncModal: React.FC = () => {
         {/* Content */}
         <div className="p-5 overflow-y-auto space-y-5 flex-1">
           {/* Quick Metrics Bar */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3 bg-purple-50/70 border border-purple-100 rounded-xl text-center">
               <div className="flex items-center justify-center gap-1.5 text-purple-700 text-xs font-bold uppercase tracking-wider mb-1">
                 <Laptop className="w-3.5 h-3.5" /> Computadores
@@ -149,6 +150,16 @@ export const MultiDeviceSyncModal: React.FC = () => {
               </div>
               <div className="text-2xl font-black text-blue-950">&lt; 150 ms</div>
               <div className="text-[11px] text-blue-600 font-medium">Eventos en vivo</div>
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-center">
+              <div className="flex items-center justify-center gap-1.5 text-slate-700 text-xs font-bold uppercase tracking-wider mb-1">
+                <Shield className="w-3.5 h-3.5" /> Estado Urna
+              </div>
+              <div className={`text-xl font-black ${config.status === 'ABIERTA' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {config.status === 'ABIERTA' ? 'ABIERTA' : (config.status === 'CERRADA' ? 'CERRADA' : config.status)}
+              </div>
+              <div className="text-[11px] text-slate-500 font-medium">Unificado en red</div>
             </div>
           </div>
 

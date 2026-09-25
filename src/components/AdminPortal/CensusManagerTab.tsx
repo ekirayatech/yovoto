@@ -273,8 +273,8 @@ export const CensusManagerTab: React.FC = () => {
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                 >
                   <option value="TI">T.I. - Tarjeta de Identidad</option>
+                  <option value="CC">C.C. - Cédula de Ciudadanía</option>
                   <option value="RC">R.C. - Registro Civil</option>
-                  <option value="CE">C.E. - Cédula de Extranjería</option>
                   <option value="COD">CÓD - Código de Matrícula</option>
                 </select>
               </div>

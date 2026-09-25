@@ -1185,7 +1185,7 @@ export const INITIAL_STUDENTS: Student[] = [
   },
   {
     id: 'est-032',
-    documentType: 'CE',
+    documentType: 'TI',
     documentNumber: '951234882',
     fullName: 'Isabella Gabriela Contreras Hurtado',
     grade: '9°',

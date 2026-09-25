@@ -1,5 +1,27 @@
 [
   {
+    "id": "snap-1790345142884",
+    "timestamp": "2026-09-25T14:05:42.884Z",
+    "reason": "Cambio de estado de urna a: ABIERTA",
+    "totalVotes": 76,
+    "totalVotersVoted": 19,
+    "totalCensus": 40,
+    "checksum": "4f71e2c991610ca2",
+    "sizeBytes": 107750,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1790345142871",
+    "timestamp": "2026-09-25T14:05:42.871Z",
+    "reason": "Cambio de estado de urna a: CERRADA",
+    "totalVotes": 76,
+    "totalVotersVoted": 19,
+    "totalCensus": 40,
+    "checksum": "ee7a3f3c1395f72b",
+    "sizeBytes": 107376,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
     "id": "snap-1790192779152",
     "timestamp": "2026-09-23T19:46:19.152Z",
     "reason": "Resultados electorales registrados en Google Sheets",

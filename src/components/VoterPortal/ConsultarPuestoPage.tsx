@@ -175,7 +175,6 @@ export const ConsultarPuestoPage: React.FC = () => {
                 <option value="TI">T.I. - Tarjeta Identidad</option>
                 <option value="CC">C.C. - Cédula Ciudadanía</option>
                 <option value="RC">R.C. - Registro Civil</option>
-                <option value="CE">C.E. - Cédula Extranjería</option>
                 <option value="COD">CÓDIGO Estudiantil</option>
               </select>
             </div>

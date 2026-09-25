@@ -1,4 +1,4 @@
-export type DocumentType = 'TI' | 'CC' | 'RC' | 'CE' | 'COD';
+export type DocumentType = 'TI' | 'CC' | 'RC' | 'COD';
 
 export interface Position {
   id: string;

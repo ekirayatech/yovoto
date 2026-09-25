@@ -6,6 +6,7 @@ import {
   Lock,
   LogOut,
   Radio,
+  RefreshCw,
   Scale,
   Search,
   ShieldCheck,
@@ -39,7 +40,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
     isMultiComputerLive,
     setIsMultiDeviceModalOpen,
     setIsCloudBackupModalOpen,
-    sheetsSyncInfo
+    sheetsSyncInfo,
+    isSyncing,
+    refreshServerState
   } = useElection();
   const [currentTime, setCurrentTime] = useState<string>('');
 
@@ -156,11 +159,23 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNormative }) => {
               id="btn-multi-terminal"
               onClick={() => setIsMultiDeviceModalOpen(true)}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg transition-colors shrink-0 shadow-2xs cursor-pointer"
-              title="Equipos conectados en red en tiempo real"
+              title="Equipos conectados en red en tiempo real. Clic para ver detalles de terminales."
             >
               <Laptop className="w-3.5 h-3.5 text-purple-700" />
               <span>{connectedComputersCount} {connectedComputersCount === 1 ? 'Equipo' : 'Equipos'}</span>
               <span className={`w-1.5 h-1.5 rounded-full ${isMultiComputerLive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
+            </button>
+
+            {/* Quick Sincronizar en Vivo Button */}
+            <button
+              id="btn-quick-sync"
+              onClick={() => refreshServerState(true)}
+              disabled={isSyncing}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+              title="Sincronizar datos y estado de urna inmediatamente con el servidor central"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-slate-600 ${isSyncing ? 'animate-spin text-purple-700' : ''}`} />
+              <span className="hidden xl:inline">{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
             </button>
 
             {/* Cloud Backup & Google Sheets Button - Exclusivo para Administrador */}

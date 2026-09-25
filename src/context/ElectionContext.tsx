@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import {
   INITIAL_ADMINS,
   INITIAL_CANDIDATES,
@@ -68,7 +68,9 @@ interface ElectionContextType {
   terminalName: string;
   setTerminalName: (name: string) => void;
   terminalsList: TerminalInfo[];
-  refreshServerState: () => Promise<void>;
+  refreshServerState: (showLoading?: boolean) => Promise<void>;
+  isSyncing: boolean;
+  lastSyncTimestamp: string;
   setThisTerminalConfig: (name: string, role?: AppRole, mesa?: number) => void;
 
   // Modals for Multi-Device and Cloud Backup
@@ -613,48 +615,81 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  // Fetch full state from server
-  const refreshServerState = async () => {
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string>(new Date().toISOString());
+
+  const currentVersionRef = useRef<number>(0);
+  const currentStatusRef = useRef<ElectionStatus>(config.status);
+  const currentVotesCountRef = useRef<number>(votes.length);
+  const currentVotedCountRef = useRef<number>(students.filter(s => s.hasVoted).length);
+
+  useEffect(() => {
+    currentStatusRef.current = config.status;
+  }, [config.status]);
+
+  useEffect(() => {
+    currentVotesCountRef.current = votes.length;
+  }, [votes.length]);
+
+  useEffect(() => {
+    currentVotedCountRef.current = students.filter(s => s.hasVoted).length;
+  }, [students]);
+
+  // Fetch full authoritative state from server
+  const refreshServerState = async (showLoading = false) => {
+    if (showLoading) setIsSyncing(true);
     try {
-      const res = await fetch('/api/election/state');
+      const res = await fetch('/api/election/state', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
+        if (data.version) currentVersionRef.current = data.version;
         if (data.config) {
-          setConfig(prev => {
-            const hasCustomSheets = prev.googleSheets?.scriptUrl && !prev.googleSheets.scriptUrl.includes('voto_ekiraya');
-            const serverHasMock = !data.config.googleSheets?.scriptUrl || data.config.googleSheets.scriptUrl.includes('voto_ekiraya');
-            if (hasCustomSheets && serverHasMock) {
-              fetch('/api/election/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ config: prev })
-              }).catch(() => {});
-              return { ...data.config, googleSheets: prev.googleSheets };
-            }
-            return data.config;
-          });
+          setConfig(data.config);
+          currentStatusRef.current = data.config.status;
+          try {
+            localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config));
+          } catch {}
         }
-        if (data.positions) setPositions(data.positions);
-        if (data.candidates) setCandidates(data.candidates);
-        if (data.students && data.students.length > 0) {
-          setStudents(prev => {
-            if (prev.length > data.students.length) return prev;
-            return data.students;
-          });
+        if (data.positions && Array.isArray(data.positions)) {
+          setPositions(data.positions);
+          try { localStorage.setItem(STORAGE_KEYS.POSITIONS, JSON.stringify(data.positions)); } catch {}
         }
-        if (data.jurados && data.jurados.length > 0) setJurados(data.jurados);
-        if (data.admins && data.admins.length > 0) setAdmins(data.admins);
-        if (data.votes) setVotes(data.votes);
-        if (data.auditLogs) setAuditLogs(data.auditLogs);
-        if (data.superadminInbox) setSuperadminInbox(data.superadminInbox);
+        if (data.candidates && Array.isArray(data.candidates)) {
+          setCandidates(data.candidates);
+          try { localStorage.setItem(STORAGE_KEYS.CANDIDATES, JSON.stringify(data.candidates)); } catch {}
+        }
+        if (data.students && Array.isArray(data.students) && data.students.length > 0) {
+          setStudents(data.students);
+          currentVotedCountRef.current = data.students.filter((s: Student) => s.hasVoted).length;
+          try { localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(data.students)); } catch {}
+        }
+        if (data.jurados && Array.isArray(data.jurados) && data.jurados.length > 0) {
+          setJurados(data.jurados);
+          try { localStorage.setItem(STORAGE_KEYS.JURADOS, JSON.stringify(data.jurados)); } catch {}
+        }
+        if (data.admins && Array.isArray(data.admins) && data.admins.length > 0) {
+          setAdmins(data.admins);
+          try { localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(data.admins)); } catch {}
+        }
+        if (data.votes && Array.isArray(data.votes)) {
+          setVotes(data.votes);
+          currentVotesCountRef.current = data.votes.length;
+          try { localStorage.setItem(STORAGE_KEYS.VOTES, JSON.stringify(data.votes)); } catch {}
+        }
+        if (data.auditLogs && Array.isArray(data.auditLogs)) {
+          setAuditLogs(data.auditLogs);
+          try { localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(data.auditLogs)); } catch {}
+        }
+        if (data.superadminInbox && Array.isArray(data.superadminInbox)) setSuperadminInbox(data.superadminInbox);
         if (data.terminalsCount) setConnectedComputersCount(data.terminalsCount);
         if (data.terminals) setTerminalsList(data.terminals);
         setIsMultiComputerLive(true);
+        setLastSyncTimestamp(new Date().toISOString());
       }
 
       // Query server sheets status for unified live synchronization on all computers
       try {
-        const sheetsRes = await fetch('/api/election/sheets-status');
+        const sheetsRes = await fetch('/api/election/sheets-status', { cache: 'no-store' });
         if (sheetsRes.ok) {
           const sData = await sheetsRes.json();
           setSheetsSyncInfo(prev => ({
@@ -674,6 +709,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     } catch (err) {
       console.warn('Servidor central no alcanzable o en modo offline:', err);
+    } finally {
+      if (showLoading) {
+        setTimeout(() => setIsSyncing(false), 400);
+      }
     }
   };
 
@@ -685,6 +724,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const connectSSE = () => {
+      // Always catch up with authoritative state upon reconnect
+      refreshServerState();
       try {
         sse = new EventSource('/api/events');
 
@@ -775,8 +816,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             const data = JSON.parse(e.data);
             if (data.config) {
               setConfig(data.config);
+              currentStatusRef.current = data.config.status;
+              try { localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config)); } catch {}
             } else if (data.status) {
               setConfig(prev => ({ ...prev, status: data.status }));
+              currentStatusRef.current = data.status;
             }
             if (data.newLog) {
               setAuditLogs(prev => [data.newLog, ...prev]);
@@ -900,6 +944,37 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => {
       if (sse) sse.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    };
+  }, []);
+
+  // Continuous real-time reconciliation loop: guarantees all 20+ computers
+  // stay 100% synchronized even through Wi-Fi packet drops, background tab sleep, or SSE drops.
+  useEffect(() => {
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      if (!isMounted) return;
+      try {
+        const res = await fetch('/api/election/version', { cache: 'no-store' });
+        if (res.ok) {
+          const vData = await res.json();
+          if (vData.terminalsCount) setConnectedComputersCount(vData.terminalsCount);
+          if (
+            vData.version !== currentVersionRef.current ||
+            vData.status !== currentStatusRef.current ||
+            vData.votesCount !== currentVotesCountRef.current ||
+            vData.votedCount !== currentVotedCountRef.current
+          ) {
+            await refreshServerState();
+          }
+        }
+      } catch {
+        // Silently ignore transient offline glitches
+      }
+    }, 2500);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
     };
   }, []);
 
@@ -1311,8 +1386,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return { success: true, certificate };
   };
 
-  const updateElectionStatus = (newStatus: ElectionStatus) => {
+  const updateElectionStatus = async (newStatus: ElectionStatus) => {
     const now = new Date().toISOString();
+    currentStatusRef.current = newStatus;
     setConfig(prev => ({
       ...prev,
       status: newStatus,
@@ -1320,13 +1396,31 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       closedAt: newStatus === 'CERRADA' ? now : prev.closedAt
     }));
 
-    addAuditLog('APERTURA_MESA', 'ADMIN', 'Supervisión Electoral', `Cambio de estado de la jornada a: ${newStatus}`);
+    addAuditLog(
+      newStatus === 'ABIERTA' ? 'APERTURA_MESA' : (newStatus === 'CERRADA' ? 'CIERRE_MESA' : 'SISTEMA_INICIO'),
+      'ADMIN',
+      'Supervisión Electoral',
+      `Cambio de estado de la jornada a: ${newStatus}`
+    );
 
-    fetch('/api/election/status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus })
-    }).catch(err => console.warn('Error sincronizando estado con servidor:', err));
+    try {
+      const res = await fetch('/api/election/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.config) {
+          setConfig(data.config);
+          currentStatusRef.current = data.config.status;
+          try { localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config)); } catch {}
+        }
+        if (data.version) currentVersionRef.current = data.version;
+      }
+    } catch (err) {
+      console.warn('Error sincronizando estado con servidor:', err);
+    }
 
     if (broadcastChannel) {
       broadcastChannel.postMessage({ type: 'STATE_REFRESH' });
@@ -2278,6 +2372,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setTerminalName,
         terminalsList,
         refreshServerState,
+        isSyncing,
+        lastSyncTimestamp,
         authenticateStudent,
         verifyStudentAtMesa,
         castVote,
