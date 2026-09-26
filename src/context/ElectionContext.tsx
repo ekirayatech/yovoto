@@ -5,7 +5,8 @@ import {
   INITIAL_CONFIG,
   INITIAL_JURADOS,
   INITIAL_POSITIONS,
-  INITIAL_STUDENTS
+  INITIAL_STUDENTS,
+  resolveRegistradorEmail
 } from '../data/mockElectionData';
 import {
   AdminMember,
@@ -957,6 +958,14 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     const { votedMap, verifiedMap } = buildVotedAndVerifiedMaps(targetStudents);
+    const adminEmails: Record<string, string> = {};
+    for (const adm of targetAdmins) {
+      if (adm.email && adm.email.includes('@')) {
+        if (adm.id) adminEmails[adm.id] = adm.email.trim();
+        if (adm.username) adminEmails[adm.username.toLowerCase()] = adm.email.trim();
+      }
+    }
+
     const envelope: SheetsSystemStateEnvelope = {
       urnaStatus: targetStatus,
       openedAt: overrides?.openedAt ?? config.openedAt,
@@ -966,7 +975,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       version: Date.now(),
       compactVotes: serializeVotesForSheets(targetVotes),
       votedMap,
-      verifiedMap
+      verifiedMap,
+      adminEmails
     };
 
     latestSheetsSystemStateRef.current = envelope;
@@ -1962,8 +1972,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     studentsRef.current = updatedStudents;
     currentVotedCountRef.current = updatedStudents.filter(s => s.hasVoted).length;
 
-    // Institutional and superadmin email addresses
-    const fromEmail = config.institutionEmail || 'rectoria@ekiraya.edu.co';
+    // Correo de envío del certificado al votante: Usuario Registrador
+    const registradorInfo = resolveRegistradorEmail(adminsRef.current, config.institutionEmail);
+    const fromEmail = registradorInfo.email;
     const toSuperadminEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
 
     // Build Certificate
@@ -2020,8 +2031,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     addAuditLog(
       'ACTA_GENERADA',
       'SISTEMA',
-      'Servidor de Correo Institucional',
-      `Certificado Folio ${folioNumber} remitido desde ${fromEmail} a la Bandeja del Superadministrador (${toSuperadminEmail}) para ${activeVoter.fullName}`,
+      `Registrador Electoral (${fromEmail})`,
+      `Certificado Folio ${folioNumber} remitido desde el correo del Usuario Registrador (${fromEmail} - ${registradorInfo.fullName}) al votante (${activeVoter.email || 'sin correo'}) y a la Bandeja del Superadministrador (${toSuperadminEmail}) para ${activeVoter.fullName}`,
       activeVoter.mesaNumber
     );
 
@@ -2509,8 +2520,24 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const role: AdminMember['role'] = rawRole.includes('AUDIT') ? 'AUDITOR' : (rawRole.includes('REGIST') ? 'REGISTRADOR' : 'SUPER_ADMIN');
       const rawStatus = String(item.status || item.estado || item.Estado || 'ACTIVO').toUpperCase();
       const status: AdminMember['status'] = rawStatus.includes('INACT') ? 'INACTIVO' : 'ACTIVO';
-      const email = item.email || item.correo || item.Correo || '';
-      const documentNumber = String(item.documentNumber || item.documento || item.cedula || '');
+      const envEmails = latestSheetsSystemStateRef.current?.adminEmails || {};
+      const existingMatch =
+        adminsRef.current.find(a => a.id === id || a.username.toLowerCase() === username) ||
+        INITIAL_ADMINS.find(
+          a =>
+            a.id === id ||
+            a.username.toLowerCase() === username ||
+            (role === 'REGISTRADOR' && a.role === 'REGISTRADOR')
+        );
+      const email =
+        item.email ||
+        item.correo ||
+        item.Correo ||
+        envEmails[id] ||
+        envEmails[username] ||
+        existingMatch?.email ||
+        (username.includes('@') ? username : '');
+      const documentNumber = String(item.documentNumber || item.documento || item.cedula || existingMatch?.documentNumber || '');
 
       return {
         id,
@@ -3075,13 +3102,25 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Email dispatch for voting certificate
+  // Email dispatch for voting certificate (sent from Usuario Registrador's email)
   const sendCertificateByEmail = async (email: string, cert: VotingCertificate) => {
+    const registradorInfo = resolveRegistradorEmail(adminsRef.current, config.institutionEmail);
+    const senderEmail = cert.fromEmail || registradorInfo.email;
+    const updatedCert: VotingCertificate = {
+      ...cert,
+      fromEmail: senderEmail
+    };
+
     try {
       await fetch('/api/election/send-certificate-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, cert })
+        body: JSON.stringify({
+          email,
+          fromEmail: senderEmail,
+          registradorName: registradorInfo.fullName,
+          cert: updatedCert
+        })
       }).catch(err => console.warn('Error contactando endpoint de correo:', err));
     } catch {
       // Offline fallback
@@ -3090,20 +3129,21 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     addAuditLog(
       'ACTA_GENERADA',
       'SISTEMA',
-      'Servidor de Correo Ekirayá',
-      `Certificado de votación ${cert.folioNumber} enviado automáticamente a ${email} para el estudiante ${cert.studentName}`,
+      `Usuario Registrador (${senderEmail})`,
+      `Certificado de votación ${cert.folioNumber} enviado desde el correo del Usuario Registrador (${senderEmail}) a ${email} para el estudiante ${cert.studentName}`,
       cert.mesaNumber
     );
 
     return {
       success: true,
-      message: `Certificado digital remitido exitosamente a: ${email}`
+      message: `Certificado digital remitido exitosamente desde ${senderEmail} (Usuario Registrador) a: ${email}`
     };
   };
 
   // Dispatch certificate to Superadmin Inbox
   const sendCertificateToSuperadmin = async (cert: VotingCertificate) => {
-    const fromEmail = config.institutionEmail || 'rectoria@ekiraya.edu.co';
+    const registradorInfo = resolveRegistradorEmail(adminsRef.current, config.institutionEmail);
+    const fromEmail = cert.fromEmail || registradorInfo.email;
     const toEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
 
     try {

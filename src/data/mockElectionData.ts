@@ -1335,9 +1335,49 @@ export const INITIAL_CONFIG: ElectionConfig = {
     syncStatus: 'connected'
   },
   encryptionKeyFingerprint: 'SHA256:4a8b79f8e712a10b45920c8de15c32890fabc4231a',
-  institutionEmail: 'rectoria@ekiraya.edu.co',
+  institutionEmail: 'andres.galindo@ekiraya.edu.co',
   superadminEmail: 'rectoria@ekiraya.edu.co'
 };
+
+export function resolveRegistradorEmail(
+  adminsList: AdminMember[],
+  fallbackEmail?: string
+): { email: string; fullName: string; username: string } {
+  const activeRegistrador =
+    adminsList.find(a => a.role === 'REGISTRADOR' && a.status === 'ACTIVO') ||
+    adminsList.find(a => a.role === 'REGISTRADOR') ||
+    INITIAL_ADMINS.find(a => a.role === 'REGISTRADOR');
+
+  if (activeRegistrador) {
+    let email = (activeRegistrador.email || '').trim();
+    if (!email || !email.includes('@')) {
+      if (activeRegistrador.username && activeRegistrador.username.includes('@')) {
+        email = activeRegistrador.username.trim();
+      } else {
+        const matchedInitial = INITIAL_ADMINS.find(
+          ia =>
+            ia.id === activeRegistrador.id ||
+            ia.username.toLowerCase() === (activeRegistrador.username || '').toLowerCase() ||
+            ia.role === 'REGISTRADOR'
+        );
+        email =
+          matchedInitial?.email ||
+          `${(activeRegistrador.username || 'registrador').replace(/[^a-zA-Z0-9._-]/g, '').toLowerCase()}@ekiraya.edu.co`;
+      }
+    }
+    return {
+      email,
+      fullName: activeRegistrador.fullName || 'Usuario Registrador',
+      username: activeRegistrador.username || 'registrador'
+    };
+  }
+
+  return {
+    email: fallbackEmail || 'andres.galindo@ekiraya.edu.co',
+    fullName: 'Lic. Andrés Mauricio Galindo (Registrador)',
+    username: 'admincem'
+  };
+}
 
 export const INITIAL_JURADOS: JuradoMember[] = [
   {

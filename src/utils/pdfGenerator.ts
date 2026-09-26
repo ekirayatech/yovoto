@@ -128,8 +128,8 @@ export function generateCertificatePDF(cert: VotingCertificate, institutionalEma
   const station = getStationForMesa(cert.mesaNumber);
   const stationCleanName = station ? station.shortName || station.name : `Puesto Mesa 0${cert.mesaNumber}`;
 
-  // Institutional email & Superadmin notification
-  const fromEmailStr = cert.fromEmail || institutionalEmail || 'rectoria@ekiraya.edu.co';
+  // Registrador sender email & Superadmin notification
+  const fromEmailStr = cert.fromEmail || institutionalEmail || 'andres.galindo@ekiraya.edu.co';
   const superadminEmailStr = superadminEmail || 'rectoria@ekiraya.edu.co';
 
   // Helper row drawer to avoid any overlap

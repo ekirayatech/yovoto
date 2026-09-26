@@ -10,7 +10,8 @@ import {
   INITIAL_JURADOS,
   INITIAL_POSITIONS,
   INITIAL_STUDENTS,
-  POLLING_STATIONS
+  POLLING_STATIONS,
+  resolveRegistradorEmail
 } from './src/data/mockElectionData';
 import {
   AdminMember,
@@ -229,7 +230,7 @@ function generateInitialServerInbox(): CertificateInboxMessage[] {
   return votedStudents.map((student, idx) => {
     const timestamp = student.votedAt || '2026-09-17T08:35:00.000Z';
     const folioNumber = student.receiptFolio || `CE-20260917-M${String(student.mesaNumber).padStart(2, '0')}-${student.documentNumber.slice(-4)}${String(idx + 1).padStart(3, '0')}`;
-    const fromEmail = serverConfig.institutionEmail || 'rectoria@ekiraya.edu.co';
+    const fromEmail = resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail).email;
     const toEmail = serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
     const verificationHash = `04a1f87cb60c1598f80470b4ba7130da4b54e790a6ea51f04494c6f37648${String(idx + 10).padStart(4, '0')}`;
 
@@ -645,8 +646,9 @@ app.post('/api/election/vote', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
-  // Automatic institutional email dispatch to Superadministrator's inbox
-  const fromEmail = serverConfig.institutionEmail || 'rectoria@ekiraya.edu.co';
+  // Automatic email dispatch from Usuario Registrador
+  const registradorInfo = resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail);
+  const fromEmail = registradorInfo.email;
   const toEmail = serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
   const verificationHash = `${lastHash.slice(0, 16)}-M${student.mesaNumber}-${student.documentNumber}`;
 
@@ -772,33 +774,36 @@ app.post('/api/election/verify-student', (req: Request, res: Response) => {
   res.json({ success: true, studentId, version: serverStateVersion });
 });
 
-// API: Send or log certificate email delivery
+// API: Send or log certificate email delivery (from Usuario Registrador)
 app.post('/api/election/send-certificate-email', (req: Request, res: Response) => {
-  const { email, cert } = req.body;
+  const { email, cert, fromEmail } = req.body;
   if (!email || !cert) {
     res.status(400).json({ success: false, error: 'Email y datos del certificado son requeridos.' });
     return;
   }
 
+  const registradorInfo = resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail);
+  const senderEmail = fromEmail || cert.fromEmail || registradorInfo.email;
   const timestamp = new Date().toISOString();
   const newLog: AuditLog = {
     id: `log-email-${Date.now()}`,
     timestamp,
     action: 'ACTA_GENERADA',
     actorType: 'SISTEMA',
-    actorName: 'Servidor de Correo Ekirayá',
+    actorName: `Usuario Registrador (${senderEmail})`,
     mesaNumber: cert.mesaNumber,
-    details: `Certificado ${cert.folioNumber} despachado automáticamente a ${email} para el estudiante ${cert.studentName}`,
+    details: `Certificado ${cert.folioNumber} despachado desde el correo del Usuario Registrador (${senderEmail}) a ${email} para el estudiante ${cert.studentName}`,
     hash: Math.random().toString(36).substr(2, 12),
     status: 'VERIFICADO'
   };
 
   serverAuditLogs = [newLog, ...serverAuditLogs];
-  broadcast('certificate_emailed', { email, folioNumber: cert.folioNumber, log: newLog });
+  broadcast('certificate_emailed', { email, fromEmail: senderEmail, folioNumber: cert.folioNumber, log: newLog });
 
   res.json({
     success: true,
-    message: `Certificado enviado con éxito a ${email}`,
+    fromEmail: senderEmail,
+    message: `Certificado enviado con éxito desde ${senderEmail} (Usuario Registrador) a ${email}`,
     timestamp
   });
 });
@@ -819,7 +824,7 @@ app.post('/api/election/send-certificate-to-superadmin', (req: Request, res: Res
     return;
   }
 
-  const sender = fromEmail || serverConfig.institutionEmail || 'rectoria@ekiraya.edu.co';
+  const sender = fromEmail || resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail).email;
   const recipient = toEmail || serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
   const timestamp = cert.timestamp || new Date().toISOString();
 

@@ -29,6 +29,8 @@ export interface SheetsSystemStateEnvelope {
   votedMap?: Record<string, [string, string]>;
   // Map of normalized documentNumber -> verifiedAt
   verifiedMap?: Record<string, string>;
+  // Map of admin id/username -> email (preserves registrador & admin emails across Google Sheets sync)
+  adminEmails?: Record<string, string>;
 }
 
 export function isSystemStateRow(item: any): boolean {

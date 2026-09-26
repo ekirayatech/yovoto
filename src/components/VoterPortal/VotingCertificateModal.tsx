@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
-import { getStationForMesa } from '../../data/mockElectionData';
+import { getStationForMesa, resolveRegistradorEmail } from '../../data/mockElectionData';
 import { VotingCertificate } from '../../types/election';
 import { generateCertificateQRCode } from '../../utils/crypto';
 import { generateCertificatePDF } from '../../utils/pdfGenerator';
@@ -27,7 +27,9 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
   certificate,
   onClose
 }) => {
-  const { sendCertificateByEmail, config } = useElection();
+  const { sendCertificateByEmail, config, admins } = useElection();
+  const registradorInfo = resolveRegistradorEmail(admins, config.institutionEmail);
+  const senderEmail = certificate.fromEmail || registradorInfo.email;
   const [recipientEmail, setRecipientEmail] = useState<string>(
     certificate.studentEmail || 'estudiante@ekiraya.edu.co'
   );
@@ -52,7 +54,7 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
   const qrUrl = generateCertificateQRCode(certificate.verificationHash);
 
   const handleDownloadPDF = () => {
-    generateCertificatePDF(certificate);
+    generateCertificatePDF({ ...certificate, fromEmail: senderEmail }, senderEmail, config.superadminEmail);
   };
 
   const handlePrint = () => {
@@ -127,21 +129,16 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
           <div className="flex-1 text-xs space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-black text-emerald-900 text-sm">
-                Certificado remitido automáticamente a la Bandeja del Superadministrador
+                Certificado remitido automáticamente desde el correo del Usuario Registrador
               </span>
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200 text-emerald-900">
                 <Mail className="w-3 h-3 text-emerald-800" />
-                Despacho Institucional Exitoso
+                Remitente: {senderEmail}
               </span>
             </div>
             <p className="text-emerald-800 leading-relaxed">
-              El certificado con folio <strong>{certificate.folioNumber}</strong> ha sido enviado automáticamente desde el correo institucional <strong className="font-mono text-emerald-950">{certificate.fromEmail || config.institutionEmail || 'rectoria@ekiraya.edu.co'}</strong> a la Bandeja del Superadministrador (<span className="font-mono text-emerald-950">{config.superadminEmail || 'rectoria@ekiraya.edu.co'}</span>) para custodia y archivo electoral.
+              El certificado con folio <strong>{certificate.folioNumber}</strong> ha sido enviado desde el correo del <strong>Usuario Registrador ({registradorInfo.fullName})</strong>: <strong className="font-mono text-emerald-950">{senderEmail}</strong> al correo del votante{certificate.studentEmail ? <> (<strong className="font-mono text-emerald-950">{certificate.studentEmail}</strong>)</> : ''} y con copia a la Bandeja del Superadministrador (<span className="font-mono text-emerald-950">{config.superadminEmail || 'rectoria@ekiraya.edu.co'}</span>).
             </p>
-            {certificate.studentEmail && (
-              <p className="text-emerald-800 leading-relaxed text-[11px]">
-                Copia enviada al buzón del estudiante: <strong className="font-mono text-emerald-950">{certificate.studentEmail}</strong>.
-              </p>
-            )}
           </div>
         </div>
 
@@ -207,9 +204,9 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
                   <span className="font-medium text-slate-800">{formattedDate}</span>
                 </div>
                 <div className="flex items-center justify-between py-1">
-                  <span className="font-semibold text-slate-500">Despacho Institucional:</span>
+                  <span className="font-semibold text-slate-500">Correo Envío (Registrador):</span>
                   <span className="font-medium text-emerald-800 text-[11px] font-mono">
-                    De: {certificate.fromEmail || config.institutionEmail || 'rectoria@ekiraya.edu.co'} &rarr; Bandeja Superadmin
+                    De: {senderEmail} ({registradorInfo.fullName})
                   </span>
                 </div>
               </div>
@@ -280,11 +277,16 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
         <div className="p-6 bg-white space-y-4 no-print">
           {/* Email Dispatch Section */}
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
-            <div className="flex items-center gap-2 mb-2">
-              <Mail className="w-4 h-4 text-purple-700" />
-              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                Reenviar o remitir copia del certificado por correo
-              </h4>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2">
+              <div className="flex items-center gap-2">
+                <Mail className="w-4 h-4 text-purple-700" />
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  Enviar o reenviar certificado al votante por correo
+                </h4>
+              </div>
+              <span className="text-[11px] text-slate-500 font-mono">
+                Remitente (Registrador): <strong className="text-purple-800">{senderEmail}</strong>
+              </span>
             </div>
 
             <form onSubmit={handleSendEmail} className="flex flex-col sm:flex-row items-center gap-2">
@@ -318,7 +320,7 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
             {emailStatus === 'success' && (
               <p className="text-[11px] text-emerald-700 font-medium mt-2 flex items-center gap-1.5">
                 <Check className="w-3.5 h-3.5 text-emerald-600" />
-                Copia del certificado digital remitida exitosamente a <strong>{recipientEmail}</strong>.
+                Certificado digital remitido desde <strong className="font-mono">{senderEmail}</strong> (Usuario Registrador) a <strong>{recipientEmail}</strong>.
               </p>
             )}
             {emailStatus === 'error' && (

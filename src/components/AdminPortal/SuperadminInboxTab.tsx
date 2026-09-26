@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
-import { getStationForMesa } from '../../data/mockElectionData';
+import { getStationForMesa, resolveRegistradorEmail } from '../../data/mockElectionData';
 import { CertificateInboxMessage, VotingCertificate } from '../../types/election';
 import { generateCertificatePDF } from '../../utils/pdfGenerator';
 import { generateCertificateQRCode } from '../../utils/crypto';
@@ -30,6 +30,7 @@ export const SuperadminInboxTab: React.FC = () => {
   const {
     superadminInbox,
     config,
+    admins,
     markInboxMessageRead,
     refreshServerState,
     sendCertificateToSuperadmin
@@ -41,7 +42,8 @@ export const SuperadminInboxTab: React.FC = () => {
   const [copiedFolio, setCopiedFolio] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const institutionEmail = config.institutionEmail || 'rectoria@ekiraya.edu.co';
+  const registradorInfo = resolveRegistradorEmail(admins, config.institutionEmail);
+  const institutionEmail = registradorInfo.email;
   const superadminEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
 
   const unreadCount = useMemo(
