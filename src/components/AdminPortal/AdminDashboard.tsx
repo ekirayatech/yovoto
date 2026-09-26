@@ -35,6 +35,7 @@ import { IntegrationsTab } from './IntegrationsTab';
 import { JuradosManagerTab } from './JuradosManagerTab';
 import { LiveResultsTab } from './LiveResultsTab';
 import { OfficialActasTab } from './OfficialActasTab';
+import { RealtimeDataVisualizationPanel } from './RealtimeDataVisualizationPanel';
 import { SuperadminInboxTab } from './SuperadminInboxTab';
 import { SystemEventsLogTab } from './SystemEventsLogTab';
 import { UnifiedSheetsImportModal } from './UnifiedSheetsImportModal';
@@ -236,6 +237,9 @@ export const AdminDashboard: React.FC = () => {
           Ver Log en Tiempo Real →
         </span>
       </div>
+
+      {/* Real-time Recharts Data Visualization Panel (Participation & Candidate Votes) */}
+      <RealtimeDataVisualizationPanel />
 
       {/* Active Tab View */}
       {currentTab === 'results' && <LiveResultsTab />}
