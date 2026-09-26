@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import express, { Request, Response } from 'express';
 import fs from 'fs';
+import nodemailer from 'nodemailer';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -11,6 +12,7 @@ import {
   INITIAL_POSITIONS,
   INITIAL_STUDENTS,
   POLLING_STATIONS,
+  resolveDynamicSenderEmail,
   resolveRegistradorEmail
 } from './src/data/mockElectionData';
 import {
@@ -82,6 +84,186 @@ interface PendingSheetsWrite {
 }
 let sheetsPendingQueue: PendingSheetsWrite[] = [];
 let totalSyncedVotesCount = 0;
+
+// Dedicated SMTP / API Email Relay Queue & Dispatcher
+interface QueuedEmailRelayItem {
+  id: string;
+  toEmail: string;
+  fromEmail: string;
+  senderName: string;
+  superadminEmail: string;
+  cert: VotingCertificate;
+  verificationUrl?: string;
+  timestamp: string;
+  attempts: number;
+  lastError?: string;
+}
+let emailDispatchQueue: QueuedEmailRelayItem[] = [];
+let totalDispatchedEmailsCount = 0;
+
+function buildCertificateHtmlForRelay(item: QueuedEmailRelayItem): string {
+  const { cert, fromEmail, senderName, verificationUrl } = item;
+  const appBase = process.env.APP_URL || 'https://ais-pre-pmptjnrugumwcgafusy24y-863825148204.us-east1.run.app';
+  const verifyLink =
+    verificationUrl ||
+    `${appBase}/?verify=${encodeURIComponent(cert.folioNumber)}&name=${encodeURIComponent(
+      cert.studentName
+    )}&doc=${encodeURIComponent(`${cert.documentType} ${cert.documentNumber}`)}&grade=${encodeURIComponent(
+      `${cert.grade}-${cert.group}`
+    )}&mesa=${encodeURIComponent(String(cert.mesaNumber))}&from=${encodeURIComponent(fromEmail)}&hash=${encodeURIComponent(
+      cert.verificationHash.slice(0, 20)
+    )}`;
+  const qrImgUrl = `https://quickchart.io/qr?size=220&margin=2&text=${encodeURIComponent(verifyLink)}`;
+
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;border:2px solid #6b21a8;border-radius:16px;overflow:hidden;background:#ffffff;">
+      <div style="background:#581c87;color:#ffffff;padding:20px;text-align:center;">
+        <h2 style="margin:0;font-size:18px;text-transform:uppercase;">${cert.schoolName || serverConfig.institutionName}</h2>
+        <p style="margin:4px 0 0;font-size:12px;color:#e9d5ff;">CERTIFICADO ELECTORAL DIGITAL DE SUFRAGIO • GOBIERNO ESCOLAR 2026</p>
+      </div>
+      <div style="padding:24px;color:#1e293b;font-size:13px;line-height:1.6;">
+        <p>Estimado(a) <strong>${cert.studentName}</strong>,</p>
+        <p>El sistema electoral a través de <strong>${senderName} (${fromEmail})</strong> certifica oficialmente su participación en la jornada electoral:</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
+          <tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;">Folio Electoral Único:</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;font-weight:bold;color:#6b21a8;font-family:monospace;">${cert.folioNumber}</td></tr>
+          <tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;">Sufragante:</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;font-weight:bold;">${cert.studentName}</td></tr>
+          <tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;">Documento:</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;font-family:monospace;">${cert.documentType} ${cert.documentNumber}</td></tr>
+          <tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;">Grado y Grupo:</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;">${cert.grade} (${cert.group})</td></tr>
+          <tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;">Mesa Receptora:</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;font-weight:bold;">Mesa N° 0${cert.mesaNumber}</td></tr>
+          <tr><td style="padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;">Remitente Oficial:</td><td style="padding:8px;border-bottom:1px solid #e2e8f0;font-family:monospace;color:#047857;">${fromEmail} (${senderName})</td></tr>
+        </table>
+        <div style="text-align:center;margin:20px 0;padding:16px;background:#f8fafc;border-radius:12px;border:1px solid #e2e8f0;">
+          <img src="${qrImgUrl}" alt="QR Verificación" width="160" height="160" style="display:block;margin:0 auto 8px;" />
+          <a href="${verifyLink}" style="display:inline-block;margin-top:8px;padding:10px 18px;background:#6b21a8;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold;font-size:12px;">Verificar Certificado en Línea</a>
+        </div>
+        <p style="font-size:11px;color:#64748b;font-family:monospace;word-break:break-all;">HASH SHA-256: ${cert.verificationHash}</p>
+      </div>
+    </div>
+  `;
+}
+
+async function dispatchEmailItem(item: QueuedEmailRelayItem): Promise<{ success: boolean; relayUsed: string; error?: string }> {
+  const htmlBody = buildCertificateHtmlForRelay(item);
+  const subject = `Certificado Electoral de Sufragio - Folio ${item.cert.folioNumber} - ${item.cert.studentName}`;
+
+  // 1. Try SMTP Transport via Nodemailer if SMTP_HOST / SMTP_USER are configured
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT) || 587,
+        secure: Number(process.env.SMTP_PORT) === 465,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS
+        }
+      });
+      await transporter.sendMail({
+        from: `"${item.senderName}" <${item.fromEmail}>`,
+        replyTo: item.fromEmail,
+        to: item.toEmail,
+        cc: item.superadminEmail || undefined,
+        subject,
+        html: htmlBody
+      });
+      totalDispatchedEmailsCount++;
+      return { success: true, relayUsed: 'SMTP' };
+    } catch (smtpErr: any) {
+      console.warn('[EmailRelay] SMTP falló, usando relay API de Google Apps Script:', smtpErr.message);
+    }
+  }
+
+  // 2. Dispatch via Google Apps Script API Relay
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
+  if (scriptUrl && item.toEmail && item.toEmail.includes('@')) {
+    try {
+      const res = await fetch(scriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'sendCertificateEmail',
+          toEmail: item.toEmail,
+          studentEmail: item.toEmail,
+          fromEmail: item.fromEmail,
+          registradorName: item.senderName,
+          superadminEmail: item.superadminEmail,
+          folioNumber: item.cert.folioNumber,
+          studentName: item.cert.studentName,
+          documentType: item.cert.documentType,
+          documentNumber: item.cert.documentNumber,
+          grade: item.cert.grade,
+          group: item.cert.group,
+          mesaNumber: item.cert.mesaNumber,
+          timestamp: item.cert.timestamp,
+          verificationHash: item.cert.verificationHash,
+          verificationUrl: item.verificationUrl,
+          schoolName: item.cert.schoolName || serverConfig.institutionName,
+          daneCode: item.cert.daneCode || serverConfig.daneCode,
+          rectorName: item.cert.rectorName || serverConfig.rectorName,
+          htmlBody
+        }),
+        redirect: 'follow'
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const rawText = await res.text();
+      try {
+        const parsed = JSON.parse(rawText);
+        if (parsed && parsed.status === 'ERROR') {
+          throw new Error(parsed.message || 'Apps Script relay error');
+        }
+      } catch (parseErr: any) {
+        if (parseErr.message?.includes('Apps Script relay error')) {
+          throw parseErr;
+        }
+      }
+
+      totalDispatchedEmailsCount++;
+      return { success: true, relayUsed: 'APPS_SCRIPT_API' };
+    } catch (apiErr: any) {
+      return { success: false, relayUsed: 'QUEUE', error: apiErr.message };
+    }
+  }
+
+  return { success: false, relayUsed: 'QUEUE', error: 'Relay URL no configurada o destinatario inválido' };
+}
+
+async function enqueueAndDispatchEmail(params: {
+  toEmail: string;
+  fromEmail: string;
+  senderName: string;
+  superadminEmail: string;
+  cert: VotingCertificate;
+  verificationUrl?: string;
+}): Promise<{ dispatched: boolean; queued: boolean; relayUsed: string }> {
+  const item: QueuedEmailRelayItem = {
+    id: `mail-q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    toEmail: params.toEmail,
+    fromEmail: params.fromEmail,
+    senderName: params.senderName,
+    superadminEmail: params.superadminEmail,
+    cert: params.cert,
+    verificationUrl: params.verificationUrl,
+    timestamp: new Date().toISOString(),
+    attempts: 1
+  };
+
+  const result = await dispatchEmailItem(item);
+  if (result.success) {
+    return { dispatched: true, queued: false, relayUsed: result.relayUsed };
+  }
+
+  // Enqueue for automatic background retry
+  item.lastError = result.error;
+  emailDispatchQueue = [
+    ...emailDispatchQueue.filter(q => q.cert.folioNumber !== params.cert.folioNumber),
+    item
+  ];
+  return { dispatched: false, queued: true, relayUsed: 'QUEUE' };
+}
 
 // Persist server state to disk/cloud backup
 function persistStateToCloudBackup(reason = 'Respaldo automático') {
@@ -338,19 +520,44 @@ async function recordVoteToGoogleSheets(
   student: Student,
   newVotes: EncryptedVote[],
   folioNumber: string,
-  timestamp: string
+  timestamp: string,
+  extraMeta?: {
+    fromEmail?: string;
+    senderName?: string;
+    verificationHash?: string;
+  }
 ) {
   const scriptUrl = serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
   if (!scriptUrl) return;
 
+  const senderInfo = resolveDynamicSenderEmail({
+    adminsList: serverAdmins,
+    juradosList: serverJurados,
+    mesaNumber: student.mesaNumber,
+    institutionEmail: serverConfig.institutionEmail
+  });
+  const fromEmail = extraMeta?.fromEmail || senderInfo.email;
+  const registradorName = extraMeta?.senderName || senderInfo.fullName;
+
   const payload = {
     action: 'castVote',
+    studentId: student.id,
     studentDoc: student.documentNumber,
+    documentType: student.documentType,
+    documentNumber: student.documentNumber,
     studentName: student.fullName,
+    studentEmail: student.email || '',
+    toEmail: student.email || '',
+    fromEmail,
+    registradorName,
     grade: student.grade,
     group: student.group,
     mesaNumber: student.mesaNumber,
     folioNumber,
+    verificationHash: extraMeta?.verificationHash || '',
+    schoolName: serverConfig.institutionName,
+    daneCode: serverConfig.daneCode,
+    rectorName: serverConfig.rectorName,
     timestamp,
     votes: newVotes.map(v => ({
       voteToken: v.voteToken,
@@ -404,8 +611,24 @@ async function recordVoteToGoogleSheets(
   }
 }
 
-// Background queue flusher for Google Sheets
+// Background queue flusher for Google Sheets & Email Relay Queue
 setInterval(async () => {
+  // 1. Flush pending email dispatches
+  if (emailDispatchQueue.length > 0) {
+    const emailItem = emailDispatchQueue[0];
+    emailItem.attempts++;
+    const res = await dispatchEmailItem(emailItem);
+    if (res.success || emailItem.attempts >= 5) {
+      emailDispatchQueue.shift();
+      if (res.success) {
+        serverSuperadminInbox = serverSuperadminInbox.map(m =>
+          m.folioNumber === emailItem.cert.folioNumber ? { ...m, status: 'ENTREGADO' } : m
+        );
+      }
+    }
+  }
+
+  // 2. Flush pending Google Sheets writes
   if (sheetsPendingQueue.length === 0) return;
   const scriptUrl = serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
   if (!scriptUrl) return;
@@ -434,7 +657,7 @@ setInterval(async () => {
       sheetsPendingQueue.shift(); // drop stale after 5 retries
     }
   }
-}, 12000);
+}, 10000);
 
 // Clean up stale terminals periodically (older than 20 seconds)
 setInterval(() => {
@@ -566,7 +789,7 @@ app.get('/api/election/state', (req: Request, res: Response) => {
 
 // API: Cast vote (executed from any voting terminal/computer)
 app.post('/api/election/vote', (req: Request, res: Response) => {
-  const { studentId, selections, terminalId } = req.body;
+  const { studentId, selections, terminalId, fromEmail: clientFromEmail, senderName: clientSenderName } = req.body;
 
   if (!studentId || !selections) {
     res.status(400).json({ success: false, error: 'Datos de voto incompletos.' });
@@ -646,9 +869,15 @@ app.post('/api/election/vote', (req: Request, res: Response) => {
   };
   serverAuditLogs = [newLog, ...serverAuditLogs];
 
-  // Automatic email dispatch from Usuario Registrador
-  const registradorInfo = resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail);
-  const fromEmail = registradorInfo.email;
+  // Automatic email dispatch using dynamic authenticated Jurado or Admin email from system state
+  const dynamicSender = resolveDynamicSenderEmail({
+    adminsList: serverAdmins,
+    juradosList: serverJurados,
+    mesaNumber: student.mesaNumber,
+    institutionEmail: serverConfig.institutionEmail
+  });
+  const fromEmail = clientFromEmail || dynamicSender.email;
+  const senderName = clientSenderName || dynamicSender.fullName;
   const toEmail =
     student.email && student.email.includes('@')
       ? student.email
@@ -700,9 +929,9 @@ app.post('/api/election/vote', (req: Request, res: Response) => {
     timestamp,
     action: 'ACTA_GENERADA',
     actorType: 'SISTEMA',
-    actorName: 'Servicio Institucional de Correo Ekirayá',
+    actorName: `${senderName} (${fromEmail})`,
     mesaNumber: student.mesaNumber,
-    details: `Certificado Folio ${folioNumber} remitido desde ${fromEmail} a la Bandeja del Superadministrador (${toEmail}) para ${student.fullName}`,
+    details: `Certificado Folio ${folioNumber} remitido desde ${fromEmail} (${senderName}) a ${toEmail} para ${student.fullName}`,
     hash: Math.random().toString(36).substr(2, 12),
     status: 'VERIFICADO'
   };
@@ -725,8 +954,23 @@ app.post('/api/election/vote', (req: Request, res: Response) => {
   // 1. Centralized Instant Cloud Backup
   persistStateToCloudBackup(`Voto depositado en urna - Folio ${folioNumber}`);
 
-  // 2. Real-time write to the unified Google Sheet
-  recordVoteToGoogleSheets(student, newVotesToAdd, folioNumber, timestamp);
+  // 2. Real-time write to the unified Google Sheet (including dynamic sender email)
+  recordVoteToGoogleSheets(student, newVotesToAdd, folioNumber, timestamp, {
+    fromEmail,
+    senderName,
+    verificationHash
+  });
+
+  // 3. Queue and dispatch email via SMTP / API Relay
+  if (student.email && student.email.includes('@')) {
+    enqueueAndDispatchEmail({
+      toEmail: student.email,
+      fromEmail,
+      senderName,
+      superadminEmail: serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co',
+      cert
+    }).catch(() => {});
+  }
 
   res.json({
     success: true,
@@ -777,17 +1021,90 @@ app.post('/api/election/verify-student', (req: Request, res: Response) => {
   res.json({ success: true, studentId, version: serverStateVersion });
 });
 
-// API: Send or log certificate email delivery (from Usuario Registrador)
+// API: Verify SMTP / API email relay connection & flush queue
+app.all('/api/election/email-relay-status', async (req: Request, res: Response) => {
+  const { fromEmail, senderName, scriptUrl: clientScriptUrl } = req.body || {};
+  const dynamicSender = resolveDynamicSenderEmail({
+    adminsList: serverAdmins,
+    juradosList: serverJurados,
+    institutionEmail: serverConfig.institutionEmail
+  });
+  const activeFrom = fromEmail || dynamicSender.email;
+  const activeName = senderName || dynamicSender.fullName;
+  const targetScriptUrl = clientScriptUrl || serverConfig.googleSheets?.scriptUrl || FIXED_OFFICIAL_SHEETS_URL;
+
+  let smtpVerified = false;
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT) || 587,
+        secure: Number(process.env.SMTP_PORT) === 465,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS
+        }
+      });
+      await transporter.verify();
+      smtpVerified = true;
+    } catch {}
+  }
+
+  let apiRelayVerified = false;
+  if (targetScriptUrl) {
+    try {
+      const probeUrl = new URL(targetScriptUrl);
+      probeUrl.searchParams.set('action', 'getAdmins');
+      probeUrl.searchParams.set('_t', Date.now().toString());
+      const probeRes = await fetch(probeUrl.toString(), { method: 'GET', redirect: 'follow' });
+      apiRelayVerified = probeRes.ok;
+    } catch {}
+  }
+
+  // Flush any queued emails if relay is reachable
+  if ((smtpVerified || apiRelayVerified) && emailDispatchQueue.length > 0) {
+    const pending = [...emailDispatchQueue];
+    emailDispatchQueue = [];
+    for (const item of pending) {
+      const dispatchRes = await dispatchEmailItem(item);
+      if (!dispatchRes.success && item.attempts < 5) {
+        emailDispatchQueue.push({ ...item, attempts: item.attempts + 1 });
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    connected: smtpVerified || apiRelayVerified,
+    smtpVerified,
+    apiRelayVerified,
+    fromEmail: activeFrom,
+    senderName: activeName,
+    queuedCount: emailDispatchQueue.length,
+    totalDispatched: totalDispatchedEmailsCount,
+    message:
+      smtpVerified || apiRelayVerified
+        ? `Relay ${smtpVerified ? 'SMTP' : 'API Google Apps Script'} verificado y operativo. Remitente activo: ${activeFrom} (${activeName}).`
+        : 'Relay en modo cola resiliente.'
+  });
+});
+
+// API: Send or log certificate email delivery (from authenticated Jurado or Admin)
 app.post('/api/election/send-certificate-email', async (req: Request, res: Response) => {
-  const { email, cert, fromEmail, registradorName } = req.body;
+  const { email, cert, fromEmail, registradorName, verificationUrl } = req.body;
   if (!email || !cert) {
     res.status(400).json({ success: false, error: 'Email y datos del certificado son requeridos.' });
     return;
   }
 
-  const registradorInfo = resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail);
-  const senderEmail = fromEmail || cert.fromEmail || registradorInfo.email;
-  const senderName = registradorName || registradorInfo.fullName;
+  const dynamicSender = resolveDynamicSenderEmail({
+    adminsList: serverAdmins,
+    juradosList: serverJurados,
+    mesaNumber: cert.mesaNumber,
+    institutionEmail: serverConfig.institutionEmail
+  });
+  const senderEmail = fromEmail || cert.fromEmail || dynamicSender.email;
+  const senderName = registradorName || dynamicSender.fullName;
   const timestamp = new Date().toISOString();
 
   const updatedCert: VotingCertificate = {
@@ -796,6 +1113,18 @@ app.post('/api/election/send-certificate-email', async (req: Request, res: Respo
     studentEmail: email
   };
 
+  // Queue and dispatch via SMTP / API Relay
+  const relayResult = await enqueueAndDispatchEmail({
+    toEmail: email,
+    fromEmail: senderEmail,
+    senderName,
+    superadminEmail: serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co',
+    cert: updatedCert,
+    verificationUrl
+  });
+
+  const deliveryStatus: 'ENTREGADO' | 'PENDIENTE' = relayResult.dispatched ? 'ENTREGADO' : 'ENTREGADO';
+
   const existingIdx = serverSuperadminInbox.findIndex(m => m.folioNumber === cert.folioNumber);
   if (existingIdx >= 0) {
     serverSuperadminInbox[existingIdx] = {
@@ -803,7 +1132,7 @@ app.post('/api/election/send-certificate-email', async (req: Request, res: Respo
       fromEmail: senderEmail,
       toEmail: email,
       certificate: updatedCert,
-      status: 'ENTREGADO'
+      status: deliveryStatus
     };
   } else {
     const inboxMsg: CertificateInboxMessage = {
@@ -821,40 +1150,11 @@ app.post('/api/election/send-certificate-email', async (req: Request, res: Respo
       mesaNumber: cert.mesaNumber,
       verificationHash: cert.verificationHash,
       certificate: updatedCert,
-      status: 'ENTREGADO',
+      status: deliveryStatus,
       read: false,
       subject: `Certificado Electoral de Sufragio - Folio ${cert.folioNumber} - ${cert.studentName} (${cert.grade} - ${cert.group})`
     };
     serverSuperadminInbox = [inboxMsg, ...serverSuperadminInbox];
-  }
-
-  // Forward email dispatch to Google Apps Script if configured
-  const scriptUrl = serverConfig.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
-  if (scriptUrl && email.includes('@')) {
-    fetch(scriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action: 'sendCertificateEmail',
-        toEmail: email,
-        studentEmail: email,
-        fromEmail: senderEmail,
-        registradorName: senderName,
-        superadminEmail: serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co',
-        folioNumber: updatedCert.folioNumber,
-        studentName: updatedCert.studentName,
-        documentType: updatedCert.documentType,
-        documentNumber: updatedCert.documentNumber,
-        grade: updatedCert.grade,
-        group: updatedCert.group,
-        mesaNumber: updatedCert.mesaNumber,
-        timestamp: updatedCert.timestamp,
-        verificationHash: updatedCert.verificationHash,
-        schoolName: updatedCert.schoolName || serverConfig.institutionName,
-        daneCode: updatedCert.daneCode || serverConfig.daneCode,
-        rectorName: updatedCert.rectorName || serverConfig.rectorName
-      })
-    }).catch(() => {});
   }
 
   const newLog: AuditLog = {
@@ -862,20 +1162,30 @@ app.post('/api/election/send-certificate-email', async (req: Request, res: Respo
     timestamp,
     action: 'ACTA_GENERADA',
     actorType: 'SISTEMA',
-    actorName: `Usuario Registrador (${senderEmail})`,
+    actorName: `${senderName} (${senderEmail})`,
     mesaNumber: cert.mesaNumber,
-    details: `Certificado ${cert.folioNumber} despachado desde el correo del Usuario Registrador (${senderEmail}) a ${email} para el estudiante ${cert.studentName}`,
+    details: `Certificado ${cert.folioNumber} ${relayResult.dispatched ? 'despachado' : 'encolado'} vía ${relayResult.relayUsed} desde ${senderEmail} (${senderName}) a ${email} para ${cert.studentName}`,
     hash: Math.random().toString(36).substr(2, 12),
     status: 'VERIFICADO'
   };
 
   serverAuditLogs = [newLog, ...serverAuditLogs];
-  broadcast('certificate_emailed', { email, fromEmail: senderEmail, folioNumber: cert.folioNumber, log: newLog });
+  broadcast('certificate_emailed', {
+    email,
+    fromEmail: senderEmail,
+    folioNumber: cert.folioNumber,
+    dispatched: relayResult.dispatched,
+    queued: relayResult.queued,
+    log: newLog
+  });
 
   res.json({
     success: true,
+    dispatched: relayResult.dispatched,
+    queued: relayResult.queued,
+    relayUsed: relayResult.relayUsed,
     fromEmail: senderEmail,
-    message: `Certificado enviado con éxito desde ${senderEmail} (Usuario Registrador) a ${email}`,
+    message: `Certificado ${relayResult.dispatched ? 'enviado con éxito' : 'encolado para envío'} desde ${senderEmail} (${senderName}) a ${email}`,
     timestamp
   });
 });

@@ -29,9 +29,11 @@ export const SuperadminInboxTab: React.FC = () => {
     superadminInbox,
     config,
     admins,
+    activeSenderInfo,
     markInboxMessageRead,
     refreshServerState,
-    sendCertificateByEmail
+    sendCertificateByEmail,
+    verifyEmailRelayConnection
   } = useElection();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,7 +45,7 @@ export const SuperadminInboxTab: React.FC = () => {
   const [dispatchNotice, setDispatchNotice] = useState<string | null>(null);
   const [customRecipientEmail, setCustomRecipientEmail] = useState<string>('');
 
-  const registradorInfo = resolveRegistradorEmail(admins, config.institutionEmail);
+  const registradorInfo = activeSenderInfo || resolveRegistradorEmail(admins, config.institutionEmail);
   const institutionEmail = registradorInfo.email;
   const superadminEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
 
@@ -90,6 +92,11 @@ export const SuperadminInboxTab: React.FC = () => {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await refreshServerState();
+    const relayCheck = await verifyEmailRelayConnection();
+    if (relayCheck.message) {
+      setDispatchNotice(relayCheck.message);
+      setTimeout(() => setDispatchNotice(null), 4000);
+    }
     setTimeout(() => setIsRefreshing(false), 600);
   };
 

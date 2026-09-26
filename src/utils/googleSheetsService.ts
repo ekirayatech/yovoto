@@ -31,6 +31,11 @@ export interface SheetsSystemStateEnvelope {
   verifiedMap?: Record<string, string>;
   // Map of admin id/username -> email (preserves registrador & admin emails across Google Sheets sync)
   adminEmails?: Record<string, string>;
+  // Map of jurado id/mesa/name -> email (preserves jurado emails across Google Sheets sync)
+  juradoEmails?: Record<string, string>;
+  // Dynamic authenticated sender email & name from system state
+  activeSenderEmail?: string;
+  activeSenderName?: string;
 }
 
 export function isSystemStateRow(item: any): boolean {
@@ -589,7 +594,7 @@ export async function recordResultsToSheets(
   });
 }
 
-/** Enviar Correo Real con Certificado Electoral desde el Usuario Registrador vía Google Apps Script */
+/** Enviar Correo Real con Certificado Electoral desde el Usuario Registrador / Jurado / Admin vía Google Apps Script */
 export async function sendCertificateEmailViaSheets(
   scriptUrl: string,
   data: {
@@ -612,8 +617,48 @@ export async function sendCertificateEmailViaSheets(
     rectorName: string;
   }
 ): Promise<SheetsTestResult> {
-  return writeToSheets(scriptUrl, {
+  const res = await writeToSheets(scriptUrl, {
     action: 'sendCertificateEmail',
+    studentEmail: data.toEmail,
     ...data
   });
+  if (res.data && (res.data.status === 'ERROR' || res.data.error)) {
+    return {
+      success: false,
+      message: res.data.message || res.data.error || 'Error reportado por el relay de Google Apps Script',
+      details: JSON.stringify(res.data)
+    };
+  }
+  return res;
+}
+
+/** Verificar conexión del relay de correo / API de Google Apps Script */
+export async function verifyEmailRelayViaSheets(scriptUrl: string): Promise<{
+  connected: boolean;
+  latencyMs: number;
+  message: string;
+}> {
+  const start = Date.now();
+  try {
+    const res = await readFromSheets(scriptUrl, 'getAdmins');
+    const latencyMs = Date.now() - start;
+    if (res.success) {
+      return {
+        connected: true,
+        latencyMs,
+        message: `Relay API de Google Apps Script verificado y activo (${latencyMs} ms).`
+      };
+    }
+    return {
+      connected: false,
+      latencyMs,
+      message: res.message || 'El relay de Google Apps Script no respondió correctamente.'
+    };
+  } catch (err: any) {
+    return {
+      connected: false,
+      latencyMs: Date.now() - start,
+      message: err.message || 'Fallo de red al verificar el relay.'
+    };
+  }
 }

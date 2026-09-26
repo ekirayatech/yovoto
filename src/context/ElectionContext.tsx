@@ -6,6 +6,7 @@ import {
   INITIAL_JURADOS,
   INITIAL_POSITIONS,
   INITIAL_STUDENTS,
+  resolveDynamicSenderEmail,
   resolveRegistradorEmail
 } from '../data/mockElectionData';
 import {
@@ -51,6 +52,7 @@ import {
   serializeVotesForSheets,
   setCachedSystemStateEnvelope,
   SheetsSystemStateEnvelope,
+  verifyEmailRelayViaSheets,
   writeAdminsToSheets,
   writeAllToSheets,
   writeCandidatesToSheets,
@@ -116,6 +118,9 @@ interface ElectionContextType {
   isAdminAuthenticated: boolean;
   isJuradoAuthenticated: boolean;
   juradoName: string;
+  authenticatedAdmin: AdminMember | null;
+  authenticatedJurado: JuradoMember | null;
+  activeSenderInfo: { email: string; fullName: string; username: string; roleLabel: string };
   loginAdmin: (password: string, usernameAttempt?: string) => { success: boolean; error?: string };
   logoutAdmin: () => void;
   loginJurado: (mesaNumber: number, juradoName: string, pin: string) => { success: boolean; error?: string };
@@ -141,7 +146,8 @@ interface ElectionContextType {
   syncTableToSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string }>;
   saveTableToSheets: (table: 'voters' | 'candidates' | 'jurados' | 'admins' | 'all') => Promise<{ success: boolean; message: string }>;
   syncWithGoogleSheets: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
-  sendCertificateByEmail: (email: string, cert: VotingCertificate) => Promise<{ success: boolean; message: string }>;
+  sendCertificateByEmail: (email: string, cert: VotingCertificate) => Promise<{ success: boolean; message: string; fromEmail?: string; relayStatus?: string }>;
+  verifyEmailRelayConnection: () => Promise<{ connected: boolean; fromEmail: string; senderName: string; queuedCount: number; message: string }>;
   superadminInbox: CertificateInboxMessage[];
   markInboxMessageRead: (id: string) => Promise<void>;
   sendCertificateToSuperadmin: (cert: VotingCertificate) => Promise<{ success: boolean; message: string }>;
@@ -440,6 +446,36 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  const [authenticatedAdmin, setAuthenticatedAdmin] = useState<AdminMember | null>(() => {
+    try {
+      const saved = localStorage.getItem('ekiraya_authenticated_admin');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [authenticatedJurado, setAuthenticatedJurado] = useState<JuradoMember | null>(() => {
+    try {
+      const saved = localStorage.getItem('ekiraya_authenticated_jurado');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Resilient Email Relay Queue for guaranteed delivery
+  const emailRelayQueueRef = useRef<{ email: string; cert: VotingCertificate; fromEmail: string; senderName: string; attempts: number }[]>(
+    (() => {
+      try {
+        const saved = localStorage.getItem('ekiraya_email_relay_queue_v1');
+        return saved ? JSON.parse(saved) : [];
+      } catch {
+        return [];
+      }
+    })()
+  );
+
   // Multi-Computer Terminal Identity & Sync State
   const [terminalId] = useState<string>(() => {
     try {
@@ -482,10 +518,49 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
-  // Automatically synchronize superadminInbox with all voted students and the active Registrador email
+  const currentVersionRef = useRef<number>(0);
+  const currentStatusRef = useRef<ElectionStatus>(config.status);
+  const currentVotesCountRef = useRef<number>(votes.length);
+  const currentVotedCountRef = useRef<number>(students.filter(s => s.hasVoted).length);
+
+  // Refs for 2-second Google Sheets real-time lockstep synchronization
+  const lastLocalMutationRef = useRef<number>(0);
+  const lastSheetsResetAtRef = useRef<string>('');
+  const hasLoadedFromSheetsRef = useRef<boolean>(false);
+  const isPollingSheetsRef = useRef<boolean>(false);
+  const pollTickCountRef = useRef<number>(0);
+  const latestSheetsSystemStateRef = useRef<SheetsSystemStateEnvelope | null>(null);
+
+  const adminsRef = useRef<AdminMember[]>(admins);
+  const studentsRef = useRef<Student[]>(students);
+  const votesRef = useRef<EncryptedVote[]>(votes);
+  const candidatesRef = useRef<Candidate[]>(candidates);
+  const juradosRef = useRef<JuradoMember[]>(jurados);
+
+  // Dynamically resolve the 'from' sender email and name from the authenticated Admin, Jurado, or system state
+  const resolveActiveSender = (mesaNumber?: number) => {
+    return resolveDynamicSenderEmail({
+      adminsList: admins,
+      juradosList: jurados,
+      authenticatedAdmin,
+      authenticatedJurado,
+      isAdminAuthenticated,
+      isJuradoAuthenticated,
+      juradoMesa,
+      juradoName,
+      mesaNumber,
+      systemAdminEmails: latestSheetsSystemStateRef.current?.adminEmails,
+      systemJuradoEmails: latestSheetsSystemStateRef.current?.juradoEmails,
+      institutionEmail: latestSheetsSystemStateRef.current?.activeSenderEmail || config.institutionEmail
+    });
+  };
+
+  const activeSenderInfo = resolveActiveSender(currentRole === 'JURADO' ? juradoMesa : undefined);
+
+  // Automatically synchronize superadminInbox with all voted students and the active authenticated sender email
   useEffect(() => {
-    const registradorInfo = resolveRegistradorEmail(admins, config.institutionEmail);
-    const fromEmail = registradorInfo.email;
+    const senderInfo = resolveActiveSender(currentRole === 'JURADO' ? juradoMesa : undefined);
+    const fromEmail = senderInfo.email;
     const defaultToEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
     const votedStudents = students.filter(s => s.hasVoted);
 
@@ -517,6 +592,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           existing?.verificationHash ||
           `${simpleFastHash(st.documentNumber + folio).slice(0, 32)}-M${st.mesaNumber}-${st.documentNumber}`;
         const recipientEmail = st.email && st.email.includes('@') ? st.email : (existing?.toEmail || defaultToEmail);
+        const mesaSender = resolveActiveSender(st.mesaNumber);
+        const itemFromEmail =
+          isAdminAuthenticated || isJuradoAuthenticated
+            ? fromEmail
+            : existing?.fromEmail || mesaSender.email || fromEmail;
 
         const cert: VotingCertificate = {
           folioNumber: folio,
@@ -532,15 +612,15 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           schoolName: config.institutionName,
           daneCode: config.daneCode,
           rectorName: config.rectorName,
-          fromEmail,
+          fromEmail: itemFromEmail,
           sentToSuperadminAt: timestamp
         };
 
         if (
           !existing ||
-          existing.fromEmail !== fromEmail ||
+          existing.fromEmail !== itemFromEmail ||
           existing.toEmail !== recipientEmail ||
-          existing.certificate?.fromEmail !== fromEmail
+          existing.certificate?.fromEmail !== itemFromEmail
         ) {
           changed = true;
         }
@@ -549,7 +629,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           id: existing?.id || `inbox-cert-${st.id}-${folio}`,
           folioNumber: folio,
           timestamp,
-          fromEmail,
+          fromEmail: itemFromEmail,
           toEmail: recipientEmail,
           studentId: st.id,
           studentName: st.fullName,
@@ -560,7 +640,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           mesaNumber: st.mesaNumber,
           verificationHash,
           certificate: cert,
-          status: 'ENTREGADO',
+          status: existing?.status || 'ENTREGADO',
           read: existing?.read ?? false,
           subject: `Certificado Electoral de Sufragio - Folio ${folio} - ${st.fullName} (${st.grade} - ${st.group})`
         };
@@ -578,7 +658,23 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } catch {}
       return sorted;
     });
-  }, [students, admins, config.institutionEmail, config.superadminEmail, config.institutionName, config.daneCode, config.rectorName, votes.length]);
+  }, [
+    students,
+    admins,
+    jurados,
+    authenticatedAdmin,
+    authenticatedJurado,
+    isAdminAuthenticated,
+    isJuradoAuthenticated,
+    juradoMesa,
+    juradoName,
+    config.institutionEmail,
+    config.superadminEmail,
+    config.institutionName,
+    config.daneCode,
+    config.rectorName,
+    votes.length
+  ]);
 
   // Modals for Multi-Device and Cloud Backup
   const [isMultiDeviceModalOpen, setIsMultiDeviceModalOpen] = useState<boolean>(false);
@@ -813,25 +909,6 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch {}
   };
 
-  const currentVersionRef = useRef<number>(0);
-  const currentStatusRef = useRef<ElectionStatus>(config.status);
-  const currentVotesCountRef = useRef<number>(votes.length);
-  const currentVotedCountRef = useRef<number>(students.filter(s => s.hasVoted).length);
-
-  // Refs for 2-second Google Sheets real-time lockstep synchronization
-  const lastLocalMutationRef = useRef<number>(0);
-  const lastSheetsResetAtRef = useRef<string>('');
-  const hasLoadedFromSheetsRef = useRef<boolean>(false);
-  const isPollingSheetsRef = useRef<boolean>(false);
-  const pollTickCountRef = useRef<number>(0);
-  const latestSheetsSystemStateRef = useRef<SheetsSystemStateEnvelope | null>(null);
-
-  const adminsRef = useRef<AdminMember[]>(admins);
-  const studentsRef = useRef<Student[]>(students);
-  const votesRef = useRef<EncryptedVote[]>(votes);
-  const candidatesRef = useRef<Candidate[]>(candidates);
-  const juradosRef = useRef<JuradoMember[]>(jurados);
-
   useEffect(() => {
     currentStatusRef.current = config.status;
   }, [config.status]);
@@ -848,6 +925,19 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   useEffect(() => {
     adminsRef.current = admins;
+    if (authenticatedAdmin) {
+      const updatedMatch = admins.find(
+        a =>
+          a.id === authenticatedAdmin.id ||
+          a.username.toLowerCase() === authenticatedAdmin.username.toLowerCase()
+      );
+      if (updatedMatch && JSON.stringify(updatedMatch) !== JSON.stringify(authenticatedAdmin)) {
+        setAuthenticatedAdmin(updatedMatch);
+        try {
+          localStorage.setItem('ekiraya_authenticated_admin', JSON.stringify(updatedMatch));
+        } catch {}
+      }
+    }
   }, [admins]);
 
   useEffect(() => {
@@ -856,6 +946,20 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   useEffect(() => {
     juradosRef.current = jurados;
+    if (authenticatedJurado) {
+      const updatedMatch = jurados.find(
+        j =>
+          j.id === authenticatedJurado.id ||
+          (j.mesaNumber === authenticatedJurado.mesaNumber &&
+            j.fullName.toLowerCase().trim() === authenticatedJurado.fullName.toLowerCase().trim())
+      );
+      if (updatedMatch && JSON.stringify(updatedMatch) !== JSON.stringify(authenticatedJurado)) {
+        setAuthenticatedJurado(updatedMatch);
+        try {
+          localStorage.setItem('ekiraya_authenticated_jurado', JSON.stringify(updatedMatch));
+        } catch {}
+      }
+    }
   }, [jurados]);
 
   // Helper to overlay authoritative systemState votedMap/verifiedMap onto any student list
@@ -1079,6 +1183,30 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     }
 
+    const targetJurados = overrides?.jurados ?? juradosRef.current;
+    const juradoEmails: Record<string, string> = {};
+    for (const jur of targetJurados) {
+      if (jur.email && jur.email.includes('@')) {
+        if (jur.id) juradoEmails[jur.id] = jur.email.trim();
+        if (jur.mesaNumber) juradoEmails[`MESA_${jur.mesaNumber}`] = jur.email.trim();
+        if (jur.fullName) juradoEmails[jur.fullName.toLowerCase().trim()] = jur.email.trim();
+      }
+    }
+
+    const currentSender = resolveDynamicSenderEmail({
+      adminsList: targetAdmins,
+      juradosList: targetJurados,
+      authenticatedAdmin,
+      authenticatedJurado,
+      isAdminAuthenticated,
+      isJuradoAuthenticated,
+      juradoMesa,
+      juradoName,
+      systemAdminEmails: adminEmails,
+      systemJuradoEmails: juradoEmails,
+      institutionEmail: config.institutionEmail
+    });
+
     const envelope: SheetsSystemStateEnvelope = {
       urnaStatus: targetStatus,
       openedAt: overrides?.openedAt ?? config.openedAt,
@@ -1089,7 +1217,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       compactVotes: serializeVotesForSheets(targetVotes),
       votedMap,
       verifiedMap,
-      adminEmails
+      adminEmails,
+      juradoEmails,
+      activeSenderEmail: currentSender.email,
+      activeSenderName: currentSender.fullName
     };
 
     latestSheetsSystemStateRef.current = envelope;
@@ -1712,6 +1843,11 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         totalSyncedVotes: votesRef.current.length
       }));
       setLastSyncTimestamp(now);
+
+      // Flush any queued certificate emails now that relay connectivity is confirmed
+      if (emailRelayQueueRef.current.length > 0) {
+        verifyEmailRelayConnection().catch(() => {});
+      }
     } catch {
       // Ignorar fallos transitorios de red en el sondeo de 2s
     } finally {
@@ -2089,9 +2225,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     studentsRef.current = updatedStudents;
     currentVotedCountRef.current = updatedStudents.filter(s => s.hasVoted).length;
 
-    // Correo de envío del certificado al votante: Usuario Registrador
-    const registradorInfo = resolveRegistradorEmail(adminsRef.current, config.institutionEmail);
-    const fromEmail = registradorInfo.email;
+    // Correo de envío del certificado al votante: dinámico según Jurado o Administrador autenticado / estado del sistema
+    const senderInfo = resolveActiveSender(activeVoter.mesaNumber);
+    const fromEmail = senderInfo.email;
     const toSuperadminEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
 
     // Build Certificate
@@ -2158,8 +2294,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     addAuditLog(
       'ACTA_GENERADA',
       'SISTEMA',
-      `Registrador Electoral (${fromEmail})`,
-      `Certificado Folio ${folioNumber} remitido desde el correo del Usuario Registrador (${fromEmail} - ${registradorInfo.fullName}) al votante (${activeVoter.email || 'sin correo'}) y a la Bandeja del Superadministrador (${toSuperadminEmail}) para ${activeVoter.fullName}`,
+      `${senderInfo.roleLabel} (${fromEmail})`,
+      `Certificado Folio ${folioNumber} remitido desde el correo dinámico (${fromEmail} - ${senderInfo.fullName}) al votante (${activeVoter.email || 'sin correo'}) y a la Bandeja del Superadministrador (${toSuperadminEmail}) para ${activeVoter.fullName}`,
       activeVoter.mesaNumber
     );
 
@@ -2184,7 +2320,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         studentEmail: activeVoter.email || '',
         toEmail: activeVoter.email || '',
         fromEmail,
-        registradorName: registradorInfo.fullName,
+        registradorName: senderInfo.fullName,
         grade: activeVoter.grade,
         group: activeVoter.group,
         mesaNumber: activeVoter.mesaNumber,
@@ -2212,7 +2348,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       syncResultsTable: true
     });
 
-    // 2. Broadcast across multiple computers via Central Server API
+    // 2. Broadcast across multiple computers via Central Server API (passing dynamic sender fromEmail & senderName)
     try {
       fetch('/api/election/vote', {
         method: 'POST',
@@ -2220,7 +2356,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         body: JSON.stringify({
           studentId: activeVoter.id,
           selections: selectedCandidates,
-          terminalId
+          terminalId,
+          fromEmail,
+          senderName: senderInfo.fullName
         })
       }).catch(e => console.warn('Error notificando voto al servidor central:', e));
     } catch (err) {
@@ -2419,44 +2557,80 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const trimmed = password.trim();
     const trimmedUser = (usernameAttempt || '').trim().toLowerCase();
 
-    // Check master pins first
-    if (trimmed === 'admin2026' || trimmed === 'ekiraya2026' || trimmed === 'admin') {
-      setIsAdminAuthenticated(true);
-      try {
-        localStorage.setItem('ekiraya_admin_auth', 'true');
-      } catch {}
-      addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', 'Sesión de Administrador iniciada formalmente (Clave Maestra).');
-      return { success: true };
-    }
-
     // Search both state admins and INITIAL_ADMINS fallback
     const allKnownAdmins = [...adminsRef.current, ...INITIAL_ADMINS];
 
-    // If username provided, match user and pin
+    // 1. If username/email provided, match specific admin first so we bind their exact dynamic email from system state
     if (trimmedUser) {
-      const matchedByUser = allKnownAdmins.find(a => 
-        a.status === 'ACTIVO' && 
-        (a.username.toLowerCase() === trimmedUser || a.fullName.toLowerCase() === trimmedUser || (a.email && a.email.toLowerCase() === trimmedUser)) &&
-        a.pin.trim().toLowerCase() === trimmed.toLowerCase()
+      const matchedByUser = allKnownAdmins.find(
+        a =>
+          a.status === 'ACTIVO' &&
+          (a.username.toLowerCase() === trimmedUser ||
+            a.fullName.toLowerCase() === trimmedUser ||
+            (a.email && a.email.toLowerCase() === trimmedUser)) &&
+          (a.pin.trim().toLowerCase() === trimmed.toLowerCase() ||
+            trimmed === 'admin2026' ||
+            trimmed === 'ekiraya2026' ||
+            trimmed === 'admin')
       );
       if (matchedByUser) {
         setIsAdminAuthenticated(true);
+        setAuthenticatedAdmin(matchedByUser);
         try {
           localStorage.setItem('ekiraya_admin_auth', 'true');
+          localStorage.setItem('ekiraya_authenticated_admin', JSON.stringify(matchedByUser));
         } catch {}
-        addAuditLog('SISTEMA_INICIO', 'ADMIN', matchedByUser.fullName, `Sesión de Administrador iniciada por ${matchedByUser.fullName} (${matchedByUser.username}).`);
+        addAuditLog(
+          'SISTEMA_INICIO',
+          'ADMIN',
+          matchedByUser.fullName,
+          `Sesión de Administrador iniciada por ${matchedByUser.fullName} (${matchedByUser.email || matchedByUser.username}).`
+        );
         return { success: true };
       }
     }
 
-    // Match by PIN alone or username alone across active admins
-    const matchedByPin = allKnownAdmins.find(a => a.status === 'ACTIVO' && (a.pin.trim().toLowerCase() === trimmed.toLowerCase() || a.username.toLowerCase() === trimmed.toLowerCase()));
+    // 2. Match by PIN alone across active admins in system state
+    const matchedByPin = allKnownAdmins.find(
+      a =>
+        a.status === 'ACTIVO' &&
+        (a.pin.trim().toLowerCase() === trimmed.toLowerCase() ||
+          a.username.toLowerCase() === trimmed.toLowerCase())
+    );
     if (matchedByPin) {
       setIsAdminAuthenticated(true);
+      setAuthenticatedAdmin(matchedByPin);
       try {
         localStorage.setItem('ekiraya_admin_auth', 'true');
+        localStorage.setItem('ekiraya_authenticated_admin', JSON.stringify(matchedByPin));
       } catch {}
-      addAuditLog('SISTEMA_INICIO', 'ADMIN', matchedByPin.fullName, `Sesión de Administrador iniciada por credencial: ${matchedByPin.fullName}.`);
+      addAuditLog(
+        'SISTEMA_INICIO',
+        'ADMIN',
+        matchedByPin.fullName,
+        `Sesión de Administrador iniciada por credencial: ${matchedByPin.fullName} (${matchedByPin.email || matchedByPin.username}).`
+      );
+      return { success: true };
+    }
+
+    // 3. Master pin fallback: bind to active Registrador or Super Admin in system state
+    if (trimmed === 'admin2026' || trimmed === 'ekiraya2026' || trimmed === 'admin') {
+      const fallbackAdmin =
+        allKnownAdmins.find(a => a.role === 'REGISTRADOR' && a.status === 'ACTIVO') ||
+        allKnownAdmins.find(a => a.status === 'ACTIVO') ||
+        INITIAL_ADMINS[0];
+      setIsAdminAuthenticated(true);
+      setAuthenticatedAdmin(fallbackAdmin);
+      try {
+        localStorage.setItem('ekiraya_admin_auth', 'true');
+        localStorage.setItem('ekiraya_authenticated_admin', JSON.stringify(fallbackAdmin));
+      } catch {}
+      addAuditLog(
+        'SISTEMA_INICIO',
+        'ADMIN',
+        fallbackAdmin?.fullName || 'Supervisión Electoral',
+        `Sesión de Administrador iniciada formalmente (${fallbackAdmin?.email || config.institutionEmail}).`
+      );
       return { success: true };
     }
 
@@ -2466,28 +2640,78 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const logoutAdmin = () => {
     setIsAdminAuthenticated(false);
+    setAuthenticatedAdmin(null);
     try {
       localStorage.removeItem('ekiraya_admin_auth');
+      localStorage.removeItem('ekiraya_authenticated_admin');
     } catch {}
     setCurrentRole('VOTANTE');
   };
 
   const loginJurado = (mesaNumber: number, name: string, pin: string) => {
     const trimmedPin = pin.trim().toLowerCase();
-    const matchedJurado = juradosRef.current.find(j => j.mesaNumber === mesaNumber && j.status === 'ACTIVO');
+    const trimmedName = (name || '').trim().toLowerCase();
+    const allKnownJurados = [...juradosRef.current, ...INITIAL_JURADOS];
+
+    const matchedByNameAndMesa = allKnownJurados.find(
+      j =>
+        j.mesaNumber === mesaNumber &&
+        j.status === 'ACTIVO' &&
+        (j.fullName.toLowerCase().includes(trimmedName) ||
+          (j.email && j.email.toLowerCase() === trimmedName))
+    );
+    const matchedJurado =
+      matchedByNameAndMesa ||
+      allKnownJurados.find(j => j.mesaNumber === mesaNumber && j.status === 'ACTIVO');
     const matchesJuradoPin = matchedJurado ? matchedJurado.pin.toLowerCase() === trimmedPin : false;
-    const anyJuradoPinMatch = juradosRef.current.find(j => j.status === 'ACTIVO' && j.pin.toLowerCase() === trimmedPin);
-    const valid = trimmedPin === 'jurado2026' || trimmedPin === `mesa0${mesaNumber}` || trimmedPin === `mesa${mesaNumber}` || trimmedPin === '1234' || matchesJuradoPin || Boolean(anyJuradoPinMatch);
+    const anyJuradoPinMatch = allKnownJurados.find(
+      j => j.status === 'ACTIVO' && j.pin.toLowerCase() === trimmedPin
+    );
+
+    const valid =
+      trimmedPin === 'jurado2026' ||
+      trimmedPin === `mesa0${mesaNumber}` ||
+      trimmedPin === `mesa${mesaNumber}` ||
+      trimmedPin === '1234' ||
+      matchesJuradoPin ||
+      Boolean(anyJuradoPinMatch);
+
     if (valid) {
+      const resolvedJurado: JuradoMember = matchedJurado ||
+        anyJuradoPinMatch || {
+          id: `jur-mesa-${mesaNumber}`,
+          mesaNumber,
+          fullName: name || `Jurado Mesa 0${mesaNumber}`,
+          documentNumber: '',
+          role: 'PRESIDENTE_MESA',
+          pin: trimmedPin,
+          email:
+            latestSheetsSystemStateRef.current?.juradoEmails?.[`MESA_${mesaNumber}`] ||
+            INITIAL_JURADOS.find(ij => ij.mesaNumber === mesaNumber)?.email ||
+            config.institutionEmail,
+          status: 'ACTIVO'
+        };
+
+      const resolvedName =
+        name || resolvedJurado.fullName || `Jurado Mesa 0${mesaNumber}`;
+
       setIsJuradoAuthenticated(true);
       setJuradoMesa(mesaNumber);
-      setJuradoName(name || matchedJurado?.fullName || anyJuradoPinMatch?.fullName || `Jurado Mesa 0${mesaNumber}`);
+      setJuradoName(resolvedName);
+      setAuthenticatedJurado(resolvedJurado);
       try {
         localStorage.setItem('ekiraya_jurado_auth', 'true');
         localStorage.setItem('ekiraya_jurado_mesa', mesaNumber.toString());
-        localStorage.setItem('ekiraya_jurado_name', name || matchedJurado?.fullName || anyJuradoPinMatch?.fullName || `Jurado Mesa 0${mesaNumber}`);
+        localStorage.setItem('ekiraya_jurado_name', resolvedName);
+        localStorage.setItem('ekiraya_authenticated_jurado', JSON.stringify(resolvedJurado));
       } catch {}
-      addAuditLog('APERTURA_MESA', 'JURADO', name, `Acreditación exitosa de jurado para Mesa 0${mesaNumber}. Formato E-11 instalado.`, mesaNumber);
+      addAuditLog(
+        'APERTURA_MESA',
+        'JURADO',
+        resolvedName,
+        `Acreditación exitosa de jurado para Mesa 0${mesaNumber} (${resolvedJurado.email || 'correo institucional'}). Formato E-11 instalado.`,
+        mesaNumber
+      );
       return { success: true };
     }
     addAuditLog('SEGURIDAD_ALERTA', 'JURADO', name || 'Desconocido', `Intento fallido de acreditación para Mesa 0${mesaNumber} con PIN erróneo.`, mesaNumber);
@@ -2496,8 +2720,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const logoutJurado = () => {
     setIsJuradoAuthenticated(false);
+    setAuthenticatedJurado(null);
     try {
       localStorage.removeItem('ekiraya_jurado_auth');
+      localStorage.removeItem('ekiraya_authenticated_jurado');
     } catch {}
     setCurrentRole('VOTANTE');
   };
@@ -2740,6 +2966,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         };
       }
 
+      const id = item.id || `jur-sheet-${idx + 1}`;
       const mesaNumber = Number(String(item.mesaNumber || item.mesa || item.Mesa || item.puesto || 1).replace(/\D/g, '')) || 1;
       const fullName = item.fullName || item.nombre || item.Nombre || item.nombreCompleto || item.jurado || `Jurado Mesa 0${mesaNumber}`;
       const rawRole = String(item.role || item.rol || item.Rol || item.cargo || 'PRESIDENTE_MESA').toUpperCase();
@@ -2747,11 +2974,33 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const pin = String(item.pin ?? item.clave ?? item.Clave ?? 'jurado2026').trim();
       const rawStatus = String(item.status || item.estado || item.Estado || 'ACTIVO').toUpperCase();
       const status: JuradoMember['status'] = rawStatus.includes('INACT') ? 'INACTIVO' : 'ACTIVO';
-      const email = item.email || item.correo || '';
-      const documentNumber = String(item.documentNumber || item.documento || item.cedula || '');
+      const envJuradoEmails = latestSheetsSystemStateRef.current?.juradoEmails || {};
+      const existingJurado =
+        juradosRef.current.find(
+          j =>
+            j.id === id ||
+            j.mesaNumber === mesaNumber ||
+            j.fullName.toLowerCase().trim() === String(fullName).toLowerCase().trim()
+        ) ||
+        INITIAL_JURADOS.find(
+          j =>
+            j.id === id ||
+            j.mesaNumber === mesaNumber ||
+            j.fullName.toLowerCase().trim() === String(fullName).toLowerCase().trim()
+        );
+      const email =
+        item.email ||
+        item.correo ||
+        item.Correo ||
+        envJuradoEmails[id] ||
+        envJuradoEmails[String(fullName).toLowerCase().trim()] ||
+        envJuradoEmails[`MESA_${mesaNumber}`] ||
+        existingJurado?.email ||
+        '';
+      const documentNumber = String(item.documentNumber || item.documento || item.cedula || existingJurado?.documentNumber || '');
 
       return {
-        id: item.id || `jur-sheet-${idx + 1}`,
+        id,
         mesaNumber,
         fullName,
         documentNumber,
@@ -3241,10 +3490,104 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Email dispatch for voting certificate (sent from Usuario Registrador's email)
+  // Verify SMTP/API relay connection and flush any queued certificate emails
+  const verifyEmailRelayConnection = async () => {
+    const senderInfo = resolveActiveSender(currentRole === 'JURADO' ? juradoMesa : undefined);
+    const scriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+    let serverRelayOk = false;
+    let sheetsRelayOk = false;
+    let relayMessage = '';
+
+    try {
+      const srvRes = await fetch('/api/election/email-relay-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromEmail: senderInfo.email,
+          senderName: senderInfo.fullName,
+          scriptUrl
+        })
+      });
+      if (srvRes.ok) {
+        const srvData = await srvRes.json();
+        serverRelayOk = Boolean(srvData.connected || srvData.success);
+        relayMessage = srvData.message || '';
+      }
+    } catch {
+      // Fallback to direct Sheets relay check
+    }
+
+    if (scriptUrl) {
+      const checkRes = await verifyEmailRelayViaSheets(scriptUrl);
+      sheetsRelayOk = checkRes.connected;
+      if (!relayMessage) relayMessage = checkRes.message;
+    }
+
+    const connected = serverRelayOk || sheetsRelayOk;
+
+    // Flush any queued client-side emails if relay is connected
+    if (connected && emailRelayQueueRef.current.length > 0 && scriptUrl) {
+      const pending = [...emailRelayQueueRef.current];
+      const remaining: typeof pending = [];
+      for (const item of pending) {
+        try {
+          const res = await sendCertificateEmailViaSheets(scriptUrl, {
+            toEmail: item.email,
+            fromEmail: item.fromEmail,
+            registradorName: item.senderName,
+            superadminEmail: config.superadminEmail || 'rectoria@ekiraya.edu.co',
+            folioNumber: item.cert.folioNumber,
+            studentName: item.cert.studentName,
+            documentType: item.cert.documentType,
+            documentNumber: item.cert.documentNumber,
+            grade: item.cert.grade,
+            group: item.cert.group,
+            mesaNumber: item.cert.mesaNumber,
+            timestamp: item.cert.timestamp,
+            verificationHash: item.cert.verificationHash,
+            verificationUrl: buildCertificateVerificationUrl(item.cert),
+            schoolName: item.cert.schoolName || config.institutionName,
+            daneCode: item.cert.daneCode || config.daneCode,
+            rectorName: item.cert.rectorName || config.rectorName
+          });
+          if (!res.success && item.attempts < 5) {
+            remaining.push({ ...item, attempts: item.attempts + 1 });
+          }
+        } catch {
+          if (item.attempts < 5) {
+            remaining.push({ ...item, attempts: item.attempts + 1 });
+          }
+        }
+      }
+      emailRelayQueueRef.current = remaining;
+      try {
+        localStorage.setItem('ekiraya_email_relay_queue_v1', JSON.stringify(remaining));
+      } catch {}
+    }
+
+    return {
+      connected,
+      fromEmail: senderInfo.email,
+      senderName: senderInfo.fullName,
+      queuedCount: emailRelayQueueRef.current.length,
+      message:
+        relayMessage ||
+        (connected
+          ? `Relay SMTP/API conectado. Remitente activo: ${senderInfo.email} (${senderInfo.fullName}).`
+          : 'Relay en espera de conexión; los correos se encuentran encolados de forma segura.')
+    };
+  };
+
+  // Email dispatch for voting certificate (dynamically uses authenticated Jurado or Admin email from system state)
   const sendCertificateByEmail = async (email: string, cert: VotingCertificate) => {
-    const registradorInfo = resolveRegistradorEmail(adminsRef.current, config.institutionEmail);
-    const senderEmail = cert.fromEmail || registradorInfo.email;
+    const senderInfo = resolveActiveSender(cert.mesaNumber);
+    // Prioritize the dynamically resolved authenticated Jurado or Admin's email from system state
+    const senderEmail =
+      isAdminAuthenticated || isJuradoAuthenticated
+        ? senderInfo.email
+        : senderInfo.email || cert.fromEmail;
+    const senderName = senderInfo.fullName;
+
     const updatedCert: VotingCertificate = {
       ...cert,
       fromEmail: senderEmail,
@@ -3295,64 +3638,101 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return next;
     });
 
-    // 1. Dispatch via Google Apps Script (sends real HTML email from Registrador's Google account)
+    let dispatchedViaSheets = false;
+    let dispatchedViaServer = false;
+
+    // 1. Dispatch via Google Apps Script API Relay
     const scriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
     if (scriptUrl && email && email.includes('@')) {
-      sendCertificateEmailViaSheets(scriptUrl, {
-        toEmail: email,
-        fromEmail: senderEmail,
-        registradorName: registradorInfo.fullName,
-        superadminEmail: config.superadminEmail || 'rectoria@ekiraya.edu.co',
-        folioNumber: updatedCert.folioNumber,
-        studentName: updatedCert.studentName,
-        documentType: updatedCert.documentType,
-        documentNumber: updatedCert.documentNumber,
-        grade: updatedCert.grade,
-        group: updatedCert.group,
-        mesaNumber: updatedCert.mesaNumber,
-        timestamp: updatedCert.timestamp,
-        verificationHash: updatedCert.verificationHash,
-        verificationUrl: buildCertificateVerificationUrl(updatedCert),
-        schoolName: updatedCert.schoolName || config.institutionName,
-        daneCode: updatedCert.daneCode || config.daneCode,
-        rectorName: updatedCert.rectorName || config.rectorName
-      }).catch(err => console.warn('Aviso al despachar correo vía Apps Script:', err));
+      try {
+        const sheetsRes = await sendCertificateEmailViaSheets(scriptUrl, {
+          toEmail: email,
+          fromEmail: senderEmail,
+          registradorName: senderName,
+          superadminEmail: config.superadminEmail || 'rectoria@ekiraya.edu.co',
+          folioNumber: updatedCert.folioNumber,
+          studentName: updatedCert.studentName,
+          documentType: updatedCert.documentType,
+          documentNumber: updatedCert.documentNumber,
+          grade: updatedCert.grade,
+          group: updatedCert.group,
+          mesaNumber: updatedCert.mesaNumber,
+          timestamp: updatedCert.timestamp,
+          verificationHash: updatedCert.verificationHash,
+          verificationUrl: buildCertificateVerificationUrl(updatedCert),
+          schoolName: updatedCert.schoolName || config.institutionName,
+          daneCode: updatedCert.daneCode || config.daneCode,
+          rectorName: updatedCert.rectorName || config.rectorName
+        });
+        dispatchedViaSheets = sheetsRes.success;
+      } catch (err) {
+        console.warn('Aviso al despachar correo vía Apps Script:', err);
+      }
     }
 
-    // 2. Notify local backend server
+    // 2. Dispatch via Backend SMTP / API Relay Server (which also maintains a persistent server retry queue)
     try {
-      await fetch('/api/election/send-certificate-email', {
+      const srvRes = await fetch('/api/election/send-certificate-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email,
           fromEmail: senderEmail,
-          registradorName: registradorInfo.fullName,
+          registradorName: senderName,
+          verificationUrl: buildCertificateVerificationUrl(updatedCert),
           cert: updatedCert
         })
-      }).catch(err => console.warn('Error contactando endpoint de correo:', err));
+      });
+      if (srvRes.ok) {
+        const srvData = await srvRes.json();
+        dispatchedViaServer = Boolean(srvData.success);
+      }
     } catch {
-      // Offline fallback
+      // Offline fallback: queue locally
     }
+
+    // 3. If both relays were unreachable, enqueue in local relay queue for automatic retry
+    if (!dispatchedViaSheets && !dispatchedViaServer && email && email.includes('@')) {
+      emailRelayQueueRef.current = [
+        ...emailRelayQueueRef.current.filter(q => q.cert.folioNumber !== updatedCert.folioNumber),
+        {
+          email,
+          cert: updatedCert,
+          fromEmail: senderEmail,
+          senderName,
+          attempts: 1
+        }
+      ];
+      try {
+        localStorage.setItem('ekiraya_email_relay_queue_v1', JSON.stringify(emailRelayQueueRef.current));
+      } catch {}
+    }
+
+    const relayStatus = dispatchedViaSheets || dispatchedViaServer ? 'DISPATCHED' : 'QUEUED';
 
     addAuditLog(
       'ACTA_GENERADA',
-      'SISTEMA',
-      `Usuario Registrador (${senderEmail})`,
-      `Certificado de votación ${cert.folioNumber} enviado desde el correo del Usuario Registrador (${senderEmail}) a ${email} para el estudiante ${cert.studentName}`,
+      isAdminAuthenticated ? 'ADMIN' : (isJuradoAuthenticated ? 'JURADO' : 'SISTEMA'),
+      `${senderInfo.roleLabel} (${senderEmail})`,
+      `Certificado de votación ${cert.folioNumber} ${relayStatus === 'DISPATCHED' ? 'despachado' : 'encolado'} desde ${senderEmail} (${senderName}) a ${email} para el estudiante ${cert.studentName}`,
       cert.mesaNumber
     );
 
     return {
       success: true,
-      message: `Certificado digital remitido exitosamente desde ${senderEmail} (Usuario Registrador) a: ${email}`
+      fromEmail: senderEmail,
+      relayStatus,
+      message: `Certificado digital ${relayStatus === 'DISPATCHED' ? 'remitido exitosamente' : 'encolado para despacho'} desde ${senderEmail} (${senderName}) a: ${email}`
     };
   };
 
   // Dispatch certificate to Superadmin Inbox
   const sendCertificateToSuperadmin = async (cert: VotingCertificate) => {
-    const registradorInfo = resolveRegistradorEmail(adminsRef.current, config.institutionEmail);
-    const fromEmail = cert.fromEmail || registradorInfo.email;
+    const senderInfo = resolveActiveSender(cert.mesaNumber);
+    const fromEmail =
+      isAdminAuthenticated || isJuradoAuthenticated
+        ? senderInfo.email
+        : senderInfo.email || cert.fromEmail;
     const toEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
 
     try {
@@ -3518,12 +3898,16 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         isAdminAuthenticated,
         isJuradoAuthenticated,
         juradoName,
+        authenticatedAdmin,
+        authenticatedJurado,
+        activeSenderInfo,
         loginAdmin,
         logoutAdmin,
         loginJurado,
         logoutJurado,
         syncWithGoogleSheets,
         sendCertificateByEmail,
+        verifyEmailRelayConnection,
         superadminInbox,
         markInboxMessageRead,
         sendCertificateToSuperadmin,

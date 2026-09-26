@@ -1339,44 +1339,201 @@ export const INITIAL_CONFIG: ElectionConfig = {
   superadminEmail: 'rectoria@ekiraya.edu.co'
 };
 
-export function resolveRegistradorEmail(
-  adminsList: AdminMember[],
-  fallbackEmail?: string
-): { email: string; fullName: string; username: string } {
+export interface DynamicSenderContext {
+  adminsList?: AdminMember[];
+  juradosList?: JuradoMember[];
+  authenticatedAdmin?: AdminMember | null;
+  authenticatedJurado?: JuradoMember | null;
+  isAdminAuthenticated?: boolean;
+  isJuradoAuthenticated?: boolean;
+  juradoMesa?: number;
+  juradoName?: string;
+  mesaNumber?: number;
+  systemAdminEmails?: Record<string, string>;
+  systemJuradoEmails?: Record<string, string>;
+  institutionEmail?: string;
+}
+
+export function resolveAdminMemberEmail(
+  admin: AdminMember,
+  systemAdminEmails?: Record<string, string>
+): string {
+  const direct = (admin.email || '').trim();
+  if (direct && direct.includes('@')) return direct;
+  if (systemAdminEmails) {
+    const byId = admin.id ? systemAdminEmails[admin.id] : undefined;
+    if (byId && byId.includes('@')) return byId.trim();
+    const byUser = admin.username ? systemAdminEmails[admin.username.toLowerCase()] : undefined;
+    if (byUser && byUser.includes('@')) return byUser.trim();
+    const byRole = admin.role ? systemAdminEmails[`ROLE_${admin.role}`] : undefined;
+    if (byRole && byRole.includes('@')) return byRole.trim();
+  }
+  if (admin.username && admin.username.includes('@')) {
+    return admin.username.trim();
+  }
+  const matchedInitial = INITIAL_ADMINS.find(
+    ia =>
+      ia.id === admin.id ||
+      ia.username.toLowerCase() === (admin.username || '').toLowerCase() ||
+      ia.role === admin.role
+  );
+  if (matchedInitial?.email && matchedInitial.email.includes('@')) {
+    return matchedInitial.email.trim();
+  }
+  return '';
+}
+
+export function resolveJuradoMemberEmail(
+  jurado: JuradoMember,
+  systemJuradoEmails?: Record<string, string>
+): string {
+  const direct = (jurado.email || '').trim();
+  if (direct && direct.includes('@')) return direct;
+  if (systemJuradoEmails) {
+    const byId = jurado.id ? systemJuradoEmails[jurado.id] : undefined;
+    if (byId && byId.includes('@')) return byId.trim();
+    const byMesa = jurado.mesaNumber ? systemJuradoEmails[`MESA_${jurado.mesaNumber}`] : undefined;
+    if (byMesa && byMesa.includes('@')) return byMesa.trim();
+    const byName = jurado.fullName ? systemJuradoEmails[jurado.fullName.toLowerCase().trim()] : undefined;
+    if (byName && byName.includes('@')) return byName.trim();
+  }
+  const matchedInitial = INITIAL_JURADOS.find(
+    ij =>
+      ij.id === jurado.id ||
+      ij.mesaNumber === jurado.mesaNumber ||
+      ij.fullName.toLowerCase().trim() === (jurado.fullName || '').toLowerCase().trim()
+  );
+  if (matchedInitial?.email && matchedInitial.email.includes('@')) {
+    return matchedInitial.email.trim();
+  }
+  return '';
+}
+
+export function resolveDynamicSenderEmail(ctx: DynamicSenderContext): {
+  email: string;
+  fullName: string;
+  username: string;
+  roleLabel: string;
+} {
+  const adminsList = ctx.adminsList && ctx.adminsList.length > 0 ? ctx.adminsList : INITIAL_ADMINS;
+  const juradosList = ctx.juradosList && ctx.juradosList.length > 0 ? ctx.juradosList : INITIAL_JURADOS;
+
+  // 1. If an Admin is currently authenticated, dynamically use their email from the live system state
+  if (ctx.isAdminAuthenticated && ctx.authenticatedAdmin) {
+    const liveAdmin =
+      adminsList.find(
+        a =>
+          a.id === ctx.authenticatedAdmin?.id ||
+          (a.username &&
+            ctx.authenticatedAdmin?.username &&
+            a.username.toLowerCase() === ctx.authenticatedAdmin.username.toLowerCase())
+      ) || ctx.authenticatedAdmin;
+
+    const email = resolveAdminMemberEmail(liveAdmin, ctx.systemAdminEmails);
+    if (email) {
+      return {
+        email,
+        fullName: liveAdmin.fullName || 'Administrador Electoral',
+        username: liveAdmin.username || email,
+        roleLabel: liveAdmin.role === 'REGISTRADOR' ? 'Usuario Registrador' : `Administrador (${liveAdmin.role})`
+      };
+    }
+  }
+
+  // 2. If a Jurado is currently authenticated, dynamically use the authenticated Jurado's email from system state
+  if (ctx.isJuradoAuthenticated) {
+    const targetMesa = ctx.juradoMesa || ctx.mesaNumber || 1;
+    const liveJurado =
+      (ctx.authenticatedJurado &&
+        juradosList.find(
+          j =>
+            j.id === ctx.authenticatedJurado?.id ||
+            (j.fullName &&
+              ctx.authenticatedJurado?.fullName &&
+              j.fullName.toLowerCase().trim() === ctx.authenticatedJurado.fullName.toLowerCase().trim())
+        )) ||
+      (ctx.juradoName &&
+        juradosList.find(
+          j => j.fullName.toLowerCase().trim() === ctx.juradoName!.toLowerCase().trim() && j.status === 'ACTIVO'
+        )) ||
+      juradosList.find(j => j.mesaNumber === targetMesa && j.status === 'ACTIVO') ||
+      ctx.authenticatedJurado;
+
+    if (liveJurado) {
+      const email = resolveJuradoMemberEmail(liveJurado, ctx.systemJuradoEmails);
+      if (email) {
+        return {
+          email,
+          fullName: liveJurado.fullName || ctx.juradoName || `Jurado Mesa 0${targetMesa}`,
+          username: email,
+          roleLabel: `Jurado Mesa 0${liveJurado.mesaNumber || targetMesa}`
+        };
+      }
+    }
+  }
+
+  // 3. Active Registrador or Admin from the live system state
   const activeRegistrador =
     adminsList.find(a => a.role === 'REGISTRADOR' && a.status === 'ACTIVO') ||
     adminsList.find(a => a.role === 'REGISTRADOR') ||
-    INITIAL_ADMINS.find(a => a.role === 'REGISTRADOR');
+    adminsList.find(a => a.status === 'ACTIVO' && a.email && a.email.includes('@'));
 
   if (activeRegistrador) {
-    let email = (activeRegistrador.email || '').trim();
-    if (!email || !email.includes('@')) {
-      if (activeRegistrador.username && activeRegistrador.username.includes('@')) {
-        email = activeRegistrador.username.trim();
-      } else {
-        const matchedInitial = INITIAL_ADMINS.find(
-          ia =>
-            ia.id === activeRegistrador.id ||
-            ia.username.toLowerCase() === (activeRegistrador.username || '').toLowerCase() ||
-            ia.role === 'REGISTRADOR'
-        );
-        email =
-          matchedInitial?.email ||
-          `${(activeRegistrador.username || 'registrador').replace(/[^a-zA-Z0-9._-]/g, '').toLowerCase()}@ekiraya.edu.co`;
-      }
+    const email = resolveAdminMemberEmail(activeRegistrador, ctx.systemAdminEmails);
+    if (email) {
+      return {
+        email,
+        fullName: activeRegistrador.fullName || 'Usuario Registrador',
+        username: activeRegistrador.username || 'registrador',
+        roleLabel: activeRegistrador.role === 'REGISTRADOR' ? 'Usuario Registrador' : 'Administrador Electoral'
+      };
     }
-    return {
-      email,
-      fullName: activeRegistrador.fullName || 'Usuario Registrador',
-      username: activeRegistrador.username || 'registrador'
-    };
   }
 
+  // 4. If a specific mesaNumber is active, check the active Jurado for that mesa in system state
+  if (ctx.mesaNumber) {
+    const mesaJurado =
+      juradosList.find(j => j.mesaNumber === ctx.mesaNumber && j.status === 'ACTIVO') ||
+      juradosList.find(j => j.mesaNumber === ctx.mesaNumber);
+    if (mesaJurado) {
+      const email = resolveJuradoMemberEmail(mesaJurado, ctx.systemJuradoEmails);
+      if (email) {
+        return {
+          email,
+          fullName: mesaJurado.fullName || `Jurado Mesa 0${ctx.mesaNumber}`,
+          username: email,
+          roleLabel: `Jurado Mesa 0${ctx.mesaNumber}`
+        };
+      }
+    }
+  }
+
+  // 5. Fallback to system stateadminEmails or institutionEmail
+  const sysRegEmail =
+    ctx.systemAdminEmails?.['ROLE_REGISTRADOR'] ||
+    ctx.systemAdminEmails?.['ROLE_SUPER_ADMIN'] ||
+    ctx.institutionEmail ||
+    INITIAL_CONFIG.institutionEmail ||
+    'mebolanos@cem.edu.co';
+
   return {
-    email: fallbackEmail || 'mebolanos@cem.edu.co',
+    email: sysRegEmail,
     fullName: 'Lic. Andrés Mauricio Galindo (Registrador)',
-    username: 'admincem'
+    username: 'admincem',
+    roleLabel: 'Usuario Registrador'
   };
+}
+
+export function resolveRegistradorEmail(
+  adminsList: AdminMember[],
+  fallbackEmail?: string,
+  extraContext?: Partial<DynamicSenderContext>
+): { email: string; fullName: string; username: string; roleLabel?: string } {
+  return resolveDynamicSenderEmail({
+    adminsList,
+    institutionEmail: fallbackEmail,
+    ...extraContext
+  });
 }
 
 export const INITIAL_JURADOS: JuradoMember[] = [

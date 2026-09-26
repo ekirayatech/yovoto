@@ -27,9 +27,9 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
   certificate,
   onClose
 }) => {
-  const { sendCertificateByEmail, config, admins } = useElection();
-  const registradorInfo = resolveRegistradorEmail(admins, config.institutionEmail);
-  const senderEmail = certificate.fromEmail || registradorInfo.email;
+  const { sendCertificateByEmail, config, admins, activeSenderInfo } = useElection();
+  const registradorInfo = activeSenderInfo || resolveRegistradorEmail(admins, config.institutionEmail);
+  const senderEmail = registradorInfo.email || certificate.fromEmail;
   const [recipientEmail, setRecipientEmail] = useState<string>(
     certificate.studentEmail || 'estudiante@ekiraya.edu.co'
   );
