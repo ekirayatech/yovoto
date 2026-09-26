@@ -1378,6 +1378,39 @@ export const INITIAL_JURADOS: JuradoMember[] = [
 export const INITIAL_ADMINS: AdminMember[] = [
   {
     id: 'adm-01',
+    fullName: 'Esteban Bolaños R',
+    documentNumber: '1020304050',
+    username: 'mebolanos',
+    role: 'SUPER_ADMIN',
+    pin: 'P4co1980$',
+    email: 'mebolanos@cem.edu.co',
+    status: 'ACTIVO',
+    lastAccessAt: '2026-09-26T08:00:00.000Z'
+  },
+  {
+    id: 'adm-02',
+    fullName: 'Lic. Andrés Mauricio Galindo',
+    documentNumber: '80123456',
+    username: 'admincem',
+    role: 'REGISTRADOR',
+    pin: 'admin2026',
+    email: 'andres.galindo@ekiraya.edu.co',
+    status: 'ACTIVO',
+    lastAccessAt: '2026-09-26T08:05:00.000Z'
+  },
+  {
+    id: 'adm-03',
+    fullName: 'Ing. Mateo Bolaños',
+    documentNumber: '1020304051',
+    username: 'auditor.sistemas',
+    role: 'AUDITOR',
+    pin: 'admin2026',
+    email: 'mebolanos@cem.edu.co',
+    status: 'ACTIVO',
+    lastAccessAt: '2026-09-26T08:10:00.000Z'
+  },
+  {
+    id: 'adm-04',
     fullName: 'Dra. Patricia Elena Montoya Gómez',
     documentNumber: '41982301',
     username: 'rectoria',
@@ -1386,27 +1419,5 @@ export const INITIAL_ADMINS: AdminMember[] = [
     email: 'rectoria@ekiraya.edu.co',
     status: 'ACTIVO',
     lastAccessAt: '2026-09-17T07:45:00.000Z'
-  },
-  {
-    id: 'adm-02',
-    fullName: 'Lic. Andrés Mauricio Galindo',
-    documentNumber: '80123456',
-    username: 'lider.ciencias',
-    role: 'REGISTRADOR',
-    pin: 'admin2026',
-    email: 'andres.galindo@ekiraya.edu.co',
-    status: 'ACTIVO',
-    lastAccessAt: '2026-09-17T07:50:00.000Z'
-  },
-  {
-    id: 'adm-03',
-    fullName: 'Ing. Mateo Bolaños',
-    documentNumber: '1020304050',
-    username: 'auditor.sistemas',
-    role: 'AUDITOR',
-    pin: 'admin2026',
-    email: 'mebolanos@cem.edu.co',
-    status: 'ACTIVO',
-    lastAccessAt: '2026-09-17T08:10:00.000Z'
   }
 ];

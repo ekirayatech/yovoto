@@ -10,7 +10,7 @@ import {
   UserCheck,
   Users
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
 
 interface JuradoLoginFormProps {
@@ -18,7 +18,7 @@ interface JuradoLoginFormProps {
 }
 
 export const JuradoLoginForm: React.FC<JuradoLoginFormProps> = ({ onCancel }) => {
-  const { config, loginJurado, juradoMesa } = useElection();
+  const { config, loginJurado, juradoMesa, loadTableFromSheets } = useElection();
   const [selectedMesa, setSelectedMesa] = useState<number>(juradoMesa || 1);
   const [juradoName, setJuradoName] = useState<string>('Prof. Carlos Mendoza (Delegado)');
   const [juradoDoc, setJuradoDoc] = useState<string>('79450123');
@@ -30,7 +30,13 @@ export const JuradoLoginForm: React.FC<JuradoLoginFormProps> = ({ onCancel }) =>
   const totalMesas = config.totalMesas || 6;
   const mesasList = Array.from({ length: totalMesas }, (_, i) => i + 1);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Sincronizar jurados y estado de urna desde Google Sheets al abrir el formulario
+  useEffect(() => {
+    loadTableFromSheets('jurados').catch(() => {});
+    loadTableFromSheets('admins').catch(() => {});
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!juradoName.trim()) {
       setErrorMsg('Por favor ingrese el nombre del jurado.');
@@ -40,13 +46,19 @@ export const JuradoLoginForm: React.FC<JuradoLoginFormProps> = ({ onCancel }) =>
     setErrorMsg(null);
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const res = loginJurado(selectedMesa, juradoName.trim(), pin);
-      if (!res.success) {
-        setErrorMsg(res.error || 'PIN o clave de mesa incorrecta.');
-        setIsSubmitting(false);
-      }
-    }, 300);
+    let res = loginJurado(selectedMesa, juradoName.trim(), pin);
+    if (!res.success) {
+      // Consultar en caliente Google Sheets por si el jurado fue creado/actualizado recientemente en la hoja
+      try {
+        await loadTableFromSheets('jurados');
+        res = loginJurado(selectedMesa, juradoName.trim(), pin);
+      } catch {}
+    }
+
+    if (!res.success) {
+      setErrorMsg(res.error || 'PIN o clave de mesa incorrecta.');
+      setIsSubmitting(false);
+    }
   };
 
   const handleFillDemo = () => {

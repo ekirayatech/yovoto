@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   Sparkles
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useElection } from '../../context/ElectionContext';
 
 interface AdminLoginFormProps {
@@ -18,25 +18,36 @@ interface AdminLoginFormProps {
 }
 
 export const AdminLoginForm: React.FC<AdminLoginFormProps> = ({ onCancel }) => {
-  const { config, loginAdmin } = useElection();
+  const { config, loginAdmin, loadTableFromSheets } = useElection();
   const [username, setUsername] = useState<string>('admin@ekiraya.edu.co');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Sincronizar administradores y estado de urna desde Google Sheets al abrir el formulario
+  useEffect(() => {
+    loadTableFromSheets('admins').catch(() => {});
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const res = loginAdmin(password, username);
-      if (!res.success) {
-        setErrorMsg(res.error || 'Clave de administrador incorrecta. Verifique sus credenciales.');
-        setIsSubmitting(false);
-      }
-    }, 300);
+    let res = loginAdmin(password, username);
+    if (!res.success) {
+      // Consultar en caliente Google Sheets por si el usuario fue creado/actualizado recientemente en la hoja
+      try {
+        await loadTableFromSheets('admins');
+        res = loginAdmin(password, username);
+      } catch {}
+    }
+
+    if (!res.success) {
+      setErrorMsg(res.error || 'Clave de administrador incorrecta. Verifique sus credenciales.');
+      setIsSubmitting(false);
+    }
   };
 
   const handleFillDemo = () => {

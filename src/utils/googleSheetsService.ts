@@ -11,7 +11,163 @@
  * 5. Urna Cifrada (Votos)
  */
 
-import { AdminMember, Candidate, JuradoMember, Student } from '../types/election';
+import { AdminMember, Candidate, ElectionStatus, EncryptedVote, JuradoMember, Student } from '../types/election';
+
+export const SYS_STATE_ADMIN_ID = '__SYS_STATE__';
+export const SYS_STATE_USERNAME = '__sys_state__';
+
+export interface SheetsSystemStateEnvelope {
+  urnaStatus: ElectionStatus;
+  openedAt?: string;
+  closedAt?: string;
+  resetAt?: string;
+  updatedAt: string;
+  version: number;
+  // Compact tuple: [positionId, candidateId, mesaNumber, grade, timestamp, voteToken, hash]
+  compactVotes?: [string, string, number, string, string, string, string][];
+  // Map of normalized documentNumber -> [votedAt, receiptFolio]
+  votedMap?: Record<string, [string, string]>;
+  // Map of normalized documentNumber -> verifiedAt
+  verifiedMap?: Record<string, string>;
+}
+
+export function isSystemStateRow(item: any): boolean {
+  if (!item) return false;
+  if (Array.isArray(item)) {
+    const first = String(item[0] || '').trim();
+    const third = String(item[2] || '').trim();
+    return first === SYS_STATE_ADMIN_ID || third === SYS_STATE_USERNAME;
+  }
+  const id = String(item.id || '').trim();
+  const user = String(item.username || item.usuario || '').trim().toLowerCase();
+  const role = String(item.role || item.rol || '').trim().toUpperCase();
+  const fullName = String(item.fullName || item.nombre || '').trim();
+  return (
+    id === SYS_STATE_ADMIN_ID ||
+    user === SYS_STATE_USERNAME ||
+    role === 'SISTEMA' ||
+    fullName.startsWith('ESTADO_URNA:') ||
+    fullName.startsWith('{"urnaStatus"')
+  );
+}
+
+export function extractSystemStateFromAdmins(rawAdmins: any[]): {
+  cleanAdmins: any[];
+  systemState: SheetsSystemStateEnvelope | null;
+} {
+  if (!Array.isArray(rawAdmins)) {
+    return { cleanAdmins: [], systemState: null };
+  }
+
+  const cleanAdmins: any[] = [];
+  let systemState: SheetsSystemStateEnvelope | null = null;
+
+  for (const item of rawAdmins) {
+    if (isSystemStateRow(item)) {
+      const rawText = Array.isArray(item)
+        ? String(item[1] || '')
+        : String(item.fullName || item.nombre || '');
+      const rawPin = Array.isArray(item)
+        ? String(item[3] || '')
+        : String(item.pin || item.clave || '');
+
+      if (rawText.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(rawText);
+          if (parsed && (parsed.urnaStatus === 'ABIERTA' || parsed.urnaStatus === 'CERRADA' || parsed.urnaStatus === 'ESCRUTADA')) {
+            systemState = parsed;
+          }
+        } catch {
+          // Fallback to pin if JSON parse fails
+        }
+      }
+
+      if (!systemState) {
+        let status: ElectionStatus = 'ABIERTA';
+        if (rawPin === 'CERRADA' || rawText.includes('CERRADA')) status = 'CERRADA';
+        else if (rawPin === 'ESCRUTADA' || rawText.includes('ESCRUTADA')) status = 'ESCRUTADA';
+        systemState = {
+          urnaStatus: status,
+          updatedAt: new Date().toISOString(),
+          version: Date.now()
+        };
+      }
+    } else {
+      cleanAdmins.push(item);
+    }
+  }
+
+  return { cleanAdmins, systemState };
+}
+
+export function serializeVotesForSheets(
+  votes: EncryptedVote[]
+): [string, string, number, string, string, string, string][] {
+  return votes.map(v => [
+    v.positionId,
+    v.candidateId,
+    Number(v.mesaNumber) || 1,
+    v.grade || '',
+    v.timestamp || '',
+    (v.voteToken || '').slice(0, 16),
+    (v.hash || '').slice(0, 16)
+  ]);
+}
+
+export function deserializeVotesFromSheets(
+  compact: [string, string, number, string, string, string, string][]
+): EncryptedVote[] {
+  let prevHash = '0000000000000000000000000000000000000000000000000000000000000000';
+  return compact.map((tuple, idx) => {
+    const [positionId, candidateId, mesaNumber, grade, timestamp, voteToken, hash] = tuple;
+    const fullHash = hash || `HASH-${idx}-${positionId}-${candidateId}`;
+    const vote: EncryptedVote = {
+      id: `sheet-vote-${idx}-${positionId}`,
+      voteToken: voteToken || `ANON-${idx}`,
+      positionId: positionId || 'personeria',
+      candidateId: candidateId || '',
+      mesaNumber: Number(mesaNumber) || 1,
+      grade: grade || '11°',
+      timestamp: timestamp || new Date().toISOString(),
+      hash: fullHash,
+      prevHash
+    };
+    prevHash = fullHash;
+    return vote;
+  });
+}
+
+export function buildVotedAndVerifiedMaps(students: Student[]): {
+  votedMap: Record<string, [string, string]>;
+  verifiedMap: Record<string, string>;
+} {
+  const votedMap: Record<string, [string, string]> = {};
+  const verifiedMap: Record<string, string> = {};
+
+  for (const s of students) {
+    const cleanDoc = normalizeDocumentNumber(s.documentNumber);
+    if (!cleanDoc) continue;
+    if (s.hasVoted) {
+      votedMap[cleanDoc] = [s.votedAt || new Date().toISOString(), s.receiptFolio || ''];
+    }
+    if (s.isVerifiedByJurado) {
+      verifiedMap[cleanDoc] = s.verifiedAt || new Date().toISOString();
+    }
+  }
+
+  return { votedMap, verifiedMap };
+}
+
+export function buildSystemStateAdminRow(envelope: SheetsSystemStateEnvelope): AdminMember {
+  return {
+    id: SYS_STATE_ADMIN_ID,
+    fullName: JSON.stringify(envelope),
+    username: SYS_STATE_USERNAME,
+    pin: envelope.urnaStatus,
+    role: 'SISTEMA' as any,
+    status: 'ACTIVO'
+  };
+}
 
 export interface SheetsTestResult {
   success: boolean;
@@ -356,18 +512,37 @@ export async function writeJuradosToSheets(
   });
 }
 
-/** Sincronizar o Registrar Base de Datos de Administradores */
+let cachedSystemStateEnvelope: SheetsSystemStateEnvelope | null = null;
+
+export function setCachedSystemStateEnvelope(env: SheetsSystemStateEnvelope) {
+  cachedSystemStateEnvelope = env;
+}
+
+export function getCachedSystemStateEnvelope(): SheetsSystemStateEnvelope | null {
+  return cachedSystemStateEnvelope;
+}
+
+/** Sincronizar o Registrar Base de Datos de Administradores (incluyendo estado global de urna __SYS_STATE__) */
 export async function writeAdminsToSheets(
   scriptUrl: string,
-  admins: AdminMember[]
+  admins: AdminMember[],
+  systemState?: SheetsSystemStateEnvelope
 ): Promise<SheetsTestResult> {
+  if (systemState) {
+    cachedSystemStateEnvelope = systemState;
+  }
+  const cleanAdmins = admins.filter(a => !isSystemStateRow(a));
+  const payloadAdmins = cachedSystemStateEnvelope
+    ? [...cleanAdmins, buildSystemStateAdminRow(cachedSystemStateEnvelope)]
+    : cleanAdmins;
+
   return writeToSheets(scriptUrl, {
     action: 'syncAdmins',
-    admins
+    admins: payloadAdmins
   });
 }
 
-/** Sincronizar TODAS las 4 bases de datos a la vez */
+/** Sincronizar TODAS las 4 bases de datos a la vez (incluyendo estado global de urna __SYS_STATE__) */
 export async function writeAllToSheets(
   scriptUrl: string,
   data: {
@@ -375,11 +550,21 @@ export async function writeAllToSheets(
     candidates: Candidate[];
     jurados: JuradoMember[];
     admins: AdminMember[];
-  }
+  },
+  systemState?: SheetsSystemStateEnvelope
 ): Promise<SheetsTestResult> {
+  if (systemState) {
+    cachedSystemStateEnvelope = systemState;
+  }
+  const cleanAdmins = data.admins.filter(a => !isSystemStateRow(a));
+  const payloadAdmins = cachedSystemStateEnvelope
+    ? [...cleanAdmins, buildSystemStateAdminRow(cachedSystemStateEnvelope)]
+    : cleanAdmins;
+
   return writeToSheets(scriptUrl, {
     action: 'syncAll',
-    ...data
+    ...data,
+    admins: payloadAdmins
   });
 }
 

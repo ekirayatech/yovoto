@@ -28,6 +28,10 @@ import {
 } from '../types/election';
 import { calculateBlockHash, generateFolioCode, sha256, simpleFastHash } from '../utils/crypto';
 import {
+  buildVotedAndVerifiedMaps,
+  deserializeVotesFromSheets,
+  extractSystemStateFromAdmins,
+  isSystemStateRow,
   lookupVoterInSheets,
   normalizeDocumentNumber,
   readAdminsFromSheets,
@@ -35,13 +39,16 @@ import {
   readCandidatesFromSheets,
   readCensusFromSheets,
   readJuradosFromSheets,
+  recordResultsToSheets as recordResultsToSheetsDirect,
+  serializeVotesForSheets,
+  setCachedSystemStateEnvelope,
+  SheetsSystemStateEnvelope,
   writeAdminsToSheets,
   writeAllToSheets,
   writeCandidatesToSheets,
   writeJuradosToSheets,
   writeVotersToSheets,
-  writeVoteToSheets,
-  recordResultsToSheets as recordResultsToSheetsDirect
+  writeVoteToSheets
 } from '../utils/googleSheetsService';
 
 interface ElectionContextType {
@@ -698,17 +705,374 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const currentVotesCountRef = useRef<number>(votes.length);
   const currentVotedCountRef = useRef<number>(students.filter(s => s.hasVoted).length);
 
+  // Refs for 2-second Google Sheets real-time lockstep synchronization
+  const lastLocalMutationRef = useRef<number>(0);
+  const lastSheetsResetAtRef = useRef<string>('');
+  const hasLoadedFromSheetsRef = useRef<boolean>(false);
+  const isPollingSheetsRef = useRef<boolean>(false);
+  const pollTickCountRef = useRef<number>(0);
+  const latestSheetsSystemStateRef = useRef<SheetsSystemStateEnvelope | null>(null);
+
+  const adminsRef = useRef<AdminMember[]>(admins);
+  const studentsRef = useRef<Student[]>(students);
+  const votesRef = useRef<EncryptedVote[]>(votes);
+  const candidatesRef = useRef<Candidate[]>(candidates);
+  const juradosRef = useRef<JuradoMember[]>(jurados);
+
   useEffect(() => {
     currentStatusRef.current = config.status;
   }, [config.status]);
 
   useEffect(() => {
     currentVotesCountRef.current = votes.length;
-  }, [votes.length]);
+    votesRef.current = votes;
+  }, [votes]);
 
   useEffect(() => {
     currentVotedCountRef.current = students.filter(s => s.hasVoted).length;
+    studentsRef.current = students;
   }, [students]);
+
+  useEffect(() => {
+    adminsRef.current = admins;
+  }, [admins]);
+
+  useEffect(() => {
+    candidatesRef.current = candidates;
+  }, [candidates]);
+
+  useEffect(() => {
+    juradosRef.current = jurados;
+  }, [jurados]);
+
+  // Helper to overlay authoritative systemState votedMap/verifiedMap onto any student list
+  const mergeStudentsWithSystemState = (
+    baseStudents: Student[],
+    systemState: SheetsSystemStateEnvelope | null
+  ): Student[] => {
+    if (!systemState) return baseStudents;
+    const hasStateMaps =
+      Boolean(systemState.votedMap) ||
+      Boolean(systemState.verifiedMap) ||
+      Array.isArray(systemState.compactVotes);
+    if (!hasStateMaps) return baseStudents;
+
+    const votedMap = systemState.votedMap || {};
+    const verifiedMap = systemState.verifiedMap || {};
+    const hasCompactVotes = Array.isArray(systemState.compactVotes);
+    const isZeroedUrna =
+      hasCompactVotes &&
+      systemState.compactVotes!.length === 0 &&
+      Object.keys(votedMap).length === 0;
+
+    return baseStudents.map(s => {
+      const cleanDoc = normalizeDocumentNumber(s.documentNumber);
+      const votedEntry = votedMap[cleanDoc];
+      const verifiedAt = verifiedMap[cleanDoc];
+
+      if (isZeroedUrna) {
+        if (s.hasVoted || s.isVerifiedByJurado) {
+          return {
+            ...s,
+            hasVoted: false,
+            votedAt: undefined,
+            receiptFolio: undefined,
+            isVerifiedByJurado: false,
+            verifiedAt: undefined
+          };
+        }
+        return s;
+      }
+
+      let updatedStudent = s;
+      if (votedEntry) {
+        if (!s.hasVoted || s.receiptFolio !== votedEntry[1]) {
+          updatedStudent = {
+            ...updatedStudent,
+            hasVoted: true,
+            votedAt: votedEntry[0],
+            receiptFolio: votedEntry[1],
+            isVerifiedByJurado: true
+          };
+        }
+      } else if (hasCompactVotes && s.hasVoted) {
+        updatedStudent = {
+          ...updatedStudent,
+          hasVoted: false,
+          votedAt: undefined,
+          receiptFolio: undefined
+        };
+      }
+
+      if (verifiedAt && !updatedStudent.isVerifiedByJurado) {
+        updatedStudent = {
+          ...updatedStudent,
+          isVerifiedByJurado: true,
+          verifiedAt
+        };
+      }
+      return updatedStudent;
+    });
+  };
+
+  // Apply authoritative system state envelope coming from Google Sheets
+  const applySheetsSystemState = (systemState: SheetsSystemStateEnvelope | null) => {
+    if (!systemState) return;
+    latestSheetsSystemStateRef.current = systemState;
+    setCachedSystemStateEnvelope(systemState);
+    hasLoadedFromSheetsRef.current = true;
+
+    // 1. Unified Urna Status (ABIERTA | CERRADA | ESCRUTADA)
+    if (systemState.urnaStatus) {
+      const prevSt = currentStatusRef.current;
+      const nextSt = systemState.urnaStatus;
+      const statusChanged = nextSt !== prevSt;
+      currentStatusRef.current = nextSt;
+
+      setConfig(prev => {
+        if (
+          prev.status === nextSt &&
+          (!systemState.openedAt || prev.openedAt === systemState.openedAt) &&
+          (!systemState.closedAt || prev.closedAt === systemState.closedAt)
+        ) {
+          return prev;
+        }
+        const updated = {
+          ...prev,
+          status: nextSt,
+          openedAt: systemState.openedAt || prev.openedAt,
+          closedAt: systemState.closedAt || prev.closedAt,
+          googleSheets: {
+            ...prev.googleSheets,
+            status: 'success' as const,
+            lastSyncTime: new Date().toISOString()
+          }
+        };
+        try {
+          localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+
+      if (statusChanged) {
+        addSystemEvent({
+          type: 'URNA_STATUS',
+          severity: nextSt === 'ABIERTA' ? 'SUCCESS' : (nextSt === 'CERRADA' ? 'WARNING' : 'INFO'),
+          title: `Estado de Urna Unificado desde Google Sheets: ${nextSt}`,
+          description: `Sincronización en tiempo real (2s) detectó cambio de urna de ${prevSt} a ${nextSt} en Google Sheets.`,
+          source: 'Google Sheets (Sync 2s)',
+          resolved: true,
+          metadata: { previousStatus: prevSt, newStatus: nextSt }
+        });
+
+        // Align local backend server with Google Sheets status
+        fetch('/api/election/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: nextSt, fromSheetsSync: true })
+        }).catch(() => {});
+      }
+    }
+
+    // 2. Unified Votes & "Poner Urna en Cero" Reset
+    const isNewReset = Boolean(systemState.resetAt && systemState.resetAt !== lastSheetsResetAtRef.current);
+    if (systemState.resetAt) {
+      lastSheetsResetAtRef.current = systemState.resetAt;
+    }
+
+    if (Array.isArray(systemState.compactVotes)) {
+      const remoteVotes = deserializeVotesFromSheets(systemState.compactVotes);
+      const localLastHash = votesRef.current[votesRef.current.length - 1]?.hash;
+      const remoteLastHash = remoteVotes[remoteVotes.length - 1]?.hash;
+
+      if (
+        isNewReset ||
+        remoteVotes.length !== currentVotesCountRef.current ||
+        localLastHash !== remoteLastHash
+      ) {
+        setVotes(remoteVotes);
+        votesRef.current = remoteVotes;
+        currentVotesCountRef.current = remoteVotes.length;
+        try {
+          localStorage.setItem(STORAGE_KEYS.VOTES, JSON.stringify(remoteVotes));
+        } catch {}
+
+        if (remoteVotes.length === 0) {
+          setSuperadminInbox([]);
+          setLatestCertificate(null);
+        }
+      }
+    }
+
+    // 3. Unified Student Voting & Mesa Verification State
+    if (systemState.votedMap || systemState.verifiedMap || Array.isArray(systemState.compactVotes)) {
+      setStudents(prev => {
+        const merged = mergeStudentsWithSystemState(prev, systemState);
+        const changed = merged.some(
+          (st, idx) =>
+            st.hasVoted !== prev[idx]?.hasVoted ||
+            st.receiptFolio !== prev[idx]?.receiptFolio ||
+            st.isVerifiedByJurado !== prev[idx]?.isVerifiedByJurado
+        );
+        if (changed) {
+          studentsRef.current = merged;
+          currentVotedCountRef.current = merged.filter(st => st.hasVoted).length;
+          try {
+            localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(merged));
+          } catch {}
+          return merged;
+        }
+        return prev;
+      });
+    }
+  };
+
+  // Push any local state change immediately to Google Sheets in real time
+  const pushStateToGoogleSheetsRealtime = async (overrides?: {
+    status?: ElectionStatus;
+    openedAt?: string;
+    closedAt?: string;
+    resetAt?: string;
+    votes?: EncryptedVote[];
+    students?: Student[];
+    admins?: AdminMember[];
+    jurados?: JuradoMember[];
+    candidates?: Candidate[];
+    syncVotersTable?: boolean;
+    syncResultsTable?: boolean;
+  }) => {
+    lastLocalMutationRef.current = Date.now();
+    const scriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+    if (!scriptUrl) return;
+
+    const targetStatus = overrides?.status ?? currentStatusRef.current;
+    const targetVotes = overrides?.votes ?? votesRef.current;
+    const targetStudents = overrides?.students ?? studentsRef.current;
+    let targetAdmins = (overrides?.admins ?? adminsRef.current).filter(a => !isSystemStateRow(a));
+    const targetResetAt = overrides?.resetAt !== undefined ? overrides.resetAt : lastSheetsResetAtRef.current;
+    const now = new Date().toISOString();
+
+    if (overrides?.resetAt !== undefined) {
+      lastSheetsResetAtRef.current = overrides.resetAt;
+    }
+
+    const { votedMap, verifiedMap } = buildVotedAndVerifiedMaps(targetStudents);
+    const envelope: SheetsSystemStateEnvelope = {
+      urnaStatus: targetStatus,
+      openedAt: overrides?.openedAt ?? config.openedAt,
+      closedAt: overrides?.closedAt ?? config.closedAt,
+      resetAt: targetResetAt || undefined,
+      updatedAt: now,
+      version: Date.now(),
+      compactVotes: serializeVotesForSheets(targetVotes),
+      votedMap,
+      verifiedMap
+    };
+
+    latestSheetsSystemStateRef.current = envelope;
+    setCachedSystemStateEnvelope(envelope);
+
+    try {
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
+
+      // Safety guard: If this terminal hasn't loaded admins from Google Sheets yet and isn't explicitly overriding admins,
+      // read existing admins from Google Sheets first so we never overwrite custom admins created in the sheet!
+      if (!hasLoadedFromSheetsRef.current && !overrides?.admins) {
+        try {
+          const existingAdmRes = await readAdminsFromSheets(scriptUrl);
+          if (existingAdmRes.success && existingAdmRes.data) {
+            const rawAdmins = existingAdmRes.data.admins || (Array.isArray(existingAdmRes.data) ? existingAdmRes.data : []);
+            const { cleanAdmins } = extractSystemStateFromAdmins(rawAdmins);
+            if (cleanAdmins.length > 0) {
+              const normalized = normalizeRawAdmins(cleanAdmins);
+              targetAdmins = normalized;
+              setAdmins(normalized);
+              adminsRef.current = normalized;
+              try {
+                localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(normalized));
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+
+      hasLoadedFromSheetsRef.current = true;
+
+      // 1. Write __SYS_STATE__ + admins to Google Sheets immediately
+      await writeAdminsToSheets(scriptUrl, targetAdmins, envelope);
+
+      // 2. Sync Voters sheet if requested
+      if (overrides?.syncVotersTable) {
+        await writeVotersToSheets(scriptUrl, targetStudents);
+      }
+
+      // 3. Sync Candidates or Jurados if requested
+      if (overrides?.candidates) {
+        await writeCandidatesToSheets(scriptUrl, overrides.candidates);
+      }
+      if (overrides?.jurados) {
+        await writeJuradosToSheets(scriptUrl, overrides.jurados);
+      }
+
+      // 4. Sync Official Results sheet if requested
+      if (overrides?.syncResultsTable) {
+        const totalCenso = targetStudents.length;
+        const totalVotaron = targetStudents.filter(s => s.hasVoted).length;
+        const participacionPct = totalCenso > 0 ? ((totalVotaron / totalCenso) * 100).toFixed(1) : '0';
+        const activeCands = overrides?.candidates ?? candidatesRef.current;
+
+        await recordResultsToSheetsDirect(scriptUrl, {
+          institution: config.institutionName,
+          daneCode: config.daneCode,
+          academicYear: config.academicYear,
+          timestamp: now,
+          summary: {
+            totalCenso,
+            totalVotaron,
+            participacionPct: `${participacionPct}%`,
+            totalVotes: targetVotes.length,
+            totalMesas: config.totalMesas,
+            encryptionKeyFingerprint: config.encryptionKeyFingerprint
+          },
+          results: positions.map(pos => {
+            const posCands = activeCands.filter(c => c.positionId === pos.id);
+            const posVotes = targetVotes.filter(v => v.positionId === pos.id);
+            return {
+              positionId: pos.id,
+              positionTitle: pos.title,
+              totalVotes: posVotes.length,
+              candidates: posCands
+                .map(c => {
+                  const vCount = posVotes.filter(v => v.candidateId === c.id).length;
+                  const pct = posVotes.length > 0 ? ((vCount / posVotes.length) * 100).toFixed(2) : '0.00';
+                  return {
+                    id: c.id,
+                    number: c.number,
+                    fullName: c.fullName,
+                    grade: c.grade,
+                    voteCount: vCount,
+                    percent: parseFloat(pct),
+                    isBlankVote: !!c.isBlankVote
+                  };
+                })
+                .sort((a, b) => b.voteCount - a.voteCount)
+            };
+          })
+        });
+      }
+
+      setSheetsSyncInfo(prev => ({
+        ...prev,
+        status: 'success',
+        lastSyncTime: now,
+        totalSyncedVotes: targetVotes.length,
+        pendingQueueCount: 0
+      }));
+      setLastSyncTimestamp(now);
+    } catch (err) {
+      console.warn('Error en sincronización inmediata con Google Sheets:', err);
+    }
+  };
 
   // Fetch full authoritative state from server
   const refreshServerState = async (showLoading = false) => {
@@ -717,8 +1081,9 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const res = await fetch('/api/election/state', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
+        const recentlyMutatedLocally = Date.now() - lastLocalMutationRef.current < 5000;
         if (data.version) currentVersionRef.current = data.version;
-        if (data.config) {
+        if (data.config && !recentlyMutatedLocally && !hasLoadedFromSheetsRef.current) {
           setConfig(data.config);
           currentStatusRef.current = data.config.status;
           try {
@@ -729,24 +1094,28 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           setPositions(data.positions);
           try { localStorage.setItem(STORAGE_KEYS.POSITIONS, JSON.stringify(data.positions)); } catch {}
         }
-        if (data.candidates && Array.isArray(data.candidates)) {
+        if (data.candidates && Array.isArray(data.candidates) && !hasLoadedFromSheetsRef.current) {
           setCandidates(data.candidates);
           try { localStorage.setItem(STORAGE_KEYS.CANDIDATES, JSON.stringify(data.candidates)); } catch {}
         }
-        if (data.students && Array.isArray(data.students) && data.students.length > 0) {
+        if (data.students && Array.isArray(data.students) && data.students.length > 0 && !recentlyMutatedLocally && !hasLoadedFromSheetsRef.current) {
           setStudents(data.students);
           currentVotedCountRef.current = data.students.filter((s: Student) => s.hasVoted).length;
           try { localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(data.students)); } catch {}
         }
-        if (data.jurados && Array.isArray(data.jurados) && data.jurados.length > 0) {
+        if (data.jurados && Array.isArray(data.jurados) && data.jurados.length > 0 && !hasLoadedFromSheetsRef.current) {
           setJurados(data.jurados);
           try { localStorage.setItem(STORAGE_KEYS.JURADOS, JSON.stringify(data.jurados)); } catch {}
         }
-        if (data.admins && Array.isArray(data.admins) && data.admins.length > 0) {
-          setAdmins(data.admins);
-          try { localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(data.admins)); } catch {}
+        if (data.admins && Array.isArray(data.admins) && data.admins.length > 0 && !hasLoadedFromSheetsRef.current) {
+          const { cleanAdmins, systemState } = extractSystemStateFromAdmins(data.admins);
+          if (cleanAdmins.length > 0) {
+            setAdmins(cleanAdmins);
+            try { localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(cleanAdmins)); } catch {}
+          }
+          if (systemState) applySheetsSystemState(systemState);
         }
-        if (data.votes && Array.isArray(data.votes)) {
+        if (data.votes && Array.isArray(data.votes) && !recentlyMutatedLocally && !hasLoadedFromSheetsRef.current) {
           setVotes(data.votes);
           currentVotesCountRef.current = data.votes.length;
           try { localStorage.setItem(STORAGE_KEYS.VOTES, JSON.stringify(data.votes)); } catch {}
@@ -1093,41 +1462,169 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   }, []);
 
-  // Continuous real-time reconciliation loop: guarantees all 20+ computers
-  // stay 100% synchronized even through Wi-Fi packet drops, background tab sleep, or SSE drops.
+  // =========================================================================
+  // HOOK DE SINCRONIZACIÓN EN TIEMPO REAL CON GOOGLE SHEETS CADA 2 SEGUNDOS
+  // Fuerza un fetch de estado desde Google Sheets cada 2s (y al iniciar en 0ms)
+  // asegurando que todos los clientes (Votantes, Jurados, Admin) en cualquier
+  // computador vean los usuarios de la hoja y el estado unificado de la urna.
+  // =========================================================================
+  const pullStateFromGoogleSheets = async (forceAllTables = false) => {
+    if (isPollingSheetsRef.current) return;
+    // Evitar sobrescribir mutaciones locales que están escribiéndose en este instante
+    if (!forceAllTables && Date.now() - lastLocalMutationRef.current < 2500) return;
+
+    const scriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+    if (!scriptUrl) return;
+
+    isPollingSheetsRef.current = true;
+    pollTickCountRef.current += 1;
+    const tick = pollTickCountRef.current;
+    const shouldSyncAllTables = forceAllTables || !hasLoadedFromSheetsRef.current || tick === 1 || tick % 3 === 0;
+
+    try {
+      // 1. En cada ciclo de 2 segundos: Fetch obligatorio de Administradores + __SYS_STATE__ (estado de urna, votos y mapas)
+      const admRes = await readAdminsFromSheets(scriptUrl);
+      if (admRes.success && admRes.data && Date.now() - lastLocalMutationRef.current >= 2200) {
+        const rawAdmins = admRes.data.admins || (Array.isArray(admRes.data) ? admRes.data : []);
+        if (rawAdmins.length > 0) {
+          const { cleanAdmins, systemState } = extractSystemStateFromAdmins(rawAdmins);
+          if (cleanAdmins.length > 0) {
+            const normAdmins = normalizeRawAdmins(cleanAdmins);
+            const currentAdminsJson = JSON.stringify(adminsRef.current);
+            const nextAdminsJson = JSON.stringify(normAdmins);
+            if (currentAdminsJson !== nextAdminsJson) {
+              setAdmins(normAdmins);
+              adminsRef.current = normAdmins;
+              try {
+                localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(normAdmins));
+              } catch {}
+            }
+          }
+          if (systemState) {
+            applySheetsSystemState(systemState);
+          }
+          hasLoadedFromSheetsRef.current = true;
+        }
+      }
+
+      // 2. Sincronizar Jurados, Candidatos y Censo de Votantes al iniciar y periódicamente en el bucle
+      if (shouldSyncAllTables && Date.now() - lastLocalMutationRef.current >= 2200) {
+        const [jurRes, candRes, votersRes] = await Promise.allSettled([
+          readJuradosFromSheets(scriptUrl),
+          readCandidatesFromSheets(scriptUrl),
+          readCensusFromSheets(scriptUrl)
+        ]);
+
+        if (jurRes.status === 'fulfilled' && jurRes.value.success && jurRes.value.data) {
+          const rawJur = jurRes.value.data.jurados || (Array.isArray(jurRes.value.data) ? jurRes.value.data : []);
+          if (rawJur.length > 0) {
+            const normJur = normalizeRawJurados(rawJur);
+            if (JSON.stringify(juradosRef.current) !== JSON.stringify(normJur)) {
+              setJurados(normJur);
+              juradosRef.current = normJur;
+              try {
+                localStorage.setItem(STORAGE_KEYS.JURADOS, JSON.stringify(normJur));
+              } catch {}
+            }
+          }
+        }
+
+        if (candRes.status === 'fulfilled' && candRes.value.success && candRes.value.data) {
+          const rawCand = candRes.value.data.candidates || (Array.isArray(candRes.value.data) ? candRes.value.data : []);
+          if (rawCand.length > 0) {
+            const normCand = normalizeRawCandidates(rawCand);
+            if (JSON.stringify(candidatesRef.current) !== JSON.stringify(normCand)) {
+              setCandidates(normCand);
+              candidatesRef.current = normCand;
+              try {
+                localStorage.setItem(STORAGE_KEYS.CANDIDATES, JSON.stringify(normCand));
+              } catch {}
+            }
+          }
+        }
+
+        if (votersRes.status === 'fulfilled' && votersRes.value.success && votersRes.value.data) {
+          const rawStudents = votersRes.value.data.students || (Array.isArray(votersRes.value.data) ? votersRes.value.data : []);
+          if (rawStudents.length > 0) {
+            const mappedStudents: Student[] = rawStudents.map((s: any, idx: number) => ({
+              id: s.id || `est-sheet-${idx + 1}`,
+              documentType: s.documentType || 'TI',
+              documentNumber: String(s.documentNumber),
+              fullName: s.fullName,
+              grade: s.grade,
+              group: s.group,
+              mesaNumber: Number(s.mesaNumber) || 1,
+              email: s.email || '',
+              hasVoted: Boolean(s.hasVoted),
+              votedAt: s.votedAt,
+              receiptFolio: s.receiptFolio,
+              isVerifiedByJurado: Boolean(s.hasVoted)
+            }));
+            const mergedStudents = mergeStudentsWithSystemState(
+              mappedStudents,
+              latestSheetsSystemStateRef.current
+            );
+            if (JSON.stringify(studentsRef.current) !== JSON.stringify(mergedStudents)) {
+              setStudents(mergedStudents);
+              studentsRef.current = mergedStudents;
+              currentVotedCountRef.current = mergedStudents.filter(st => st.hasVoted).length;
+              try {
+                localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(mergedStudents));
+              } catch {}
+            }
+          }
+        }
+      }
+
+      const now = new Date().toISOString();
+      setSheetsSyncInfo(prev => ({
+        ...prev,
+        isConnected: true,
+        status: 'success',
+        lastSyncTime: now,
+        totalSyncedVotes: votesRef.current.length
+      }));
+      setLastSyncTimestamp(now);
+    } catch {
+      // Ignorar fallos transitorios de red en el sondeo de 2s
+    } finally {
+      isPollingSheetsRef.current = false;
+    }
+  };
+
+  // Continuous 2-second Google Sheets state fetch + terminal count sync loop
   useEffect(() => {
     let isMounted = true;
+
+    // Sincronización inmediata al abrir el sistema en cualquier computador
+    pullStateFromGoogleSheets(true);
+
     const interval = setInterval(async () => {
       if (!isMounted) return;
+      // 1. Forzar fetch de estado desde Google Sheets cada 2 segundos
+      await pullStateFromGoogleSheets(false);
+
+      // 2. Actualizar conteo de terminales en red y fallback local
       try {
         const res = await fetch('/api/election/version', { cache: 'no-store' });
         if (res.ok) {
           const vData = await res.json();
           if (vData.terminalsCount) setConnectedComputersCount(vData.terminalsCount);
           if (
-            vData.version !== currentVersionRef.current ||
-            vData.status !== currentStatusRef.current ||
-            vData.votesCount !== currentVotesCountRef.current ||
-            vData.votedCount !== currentVotedCountRef.current
+            !hasLoadedFromSheetsRef.current &&
+            Date.now() - lastLocalMutationRef.current > 5000 &&
+            (vData.version !== currentVersionRef.current ||
+              vData.status !== currentStatusRef.current ||
+              vData.votesCount !== currentVotesCountRef.current ||
+              vData.votedCount !== currentVotedCountRef.current)
           ) {
-            if (vData.status && vData.status !== currentStatusRef.current) {
-              addSystemEvent({
-                type: 'SYNC_CONFLICT',
-                severity: 'WARNING',
-                title: 'Discrepancia en Estado de Urna Detectada',
-                description: `La terminal registraba estado ${currentStatusRef.current} mientras el servidor central reportaba ${vData.status}. Reconciliación automática aplicada.`,
-                source: 'Monitor de Consistencia Local',
-                resolved: true,
-                metadata: { clientStatus: currentStatusRef.current, serverStatus: vData.status }
-              });
-            }
             await refreshServerState();
           }
         }
       } catch {
         // Silently ignore transient offline glitches
       }
-    }, 2500);
+    }, 2000);
 
     return () => {
       isMounted = false;
@@ -1368,11 +1865,16 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!student) return false;
 
     const now = new Date().toISOString();
-    setStudents(prev =>
-      prev.map(s => (s.id === studentId ? { ...s, isVerifiedByJurado: true, verifiedAt: now } : s))
+    const updatedStudents = students.map(s =>
+      s.id === studentId ? { ...s, isVerifiedByJurado: true, verifiedAt: now } : s
     );
+    setStudents(updatedStudents);
+    studentsRef.current = updatedStudents;
 
     addAuditLog('ESTUDIANTE_HABILITADO', 'JURADO', juradoName, `Estudiante ${student.fullName} verificado biométrica/documentalmente en Mesa 0${student.mesaNumber}`, student.mesaNumber);
+
+    // Sync immediately to Google Sheets so all terminals see the verification within 2s
+    pushStateToGoogleSheetsRealtime({ students: updatedStudents });
 
     // Broadcast across multiple computers via server API
     fetch('/api/election/verify-student', {
@@ -1398,6 +1900,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return { success: false, error: 'Este documento ya registró un voto previamente.' };
     }
 
+    lastLocalMutationRef.current = Date.now();
     const timestamp = new Date().toISOString();
     const folioNumber = generateFolioCode(activeVoter.documentNumber, activeVoter.mesaNumber);
     
@@ -1436,22 +1939,28 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       lastHash = voteHash;
     }
 
-    // Append votes to encrypted ballot vault locally
-    setVotes(prev => [...prev, ...newVotesToAdd]);
-
-    // Mark student as voted (secrecy preserved: which candidate they voted for is completely decoupled)
-    setStudents(prev =>
-      prev.map(s =>
-        s.id === activeVoter.id
-          ? {
-              ...s,
-              hasVoted: true,
-              votedAt: timestamp,
-              receiptFolio: folioNumber
-            }
-          : s
-      )
+    const updatedVotes = [...votes, ...newVotesToAdd];
+    const updatedStudents = students.map(s =>
+      s.id === activeVoter.id
+        ? {
+            ...s,
+            hasVoted: true,
+            votedAt: timestamp,
+            receiptFolio: folioNumber,
+            isVerifiedByJurado: true
+          }
+        : s
     );
+
+    // Append votes to encrypted ballot vault locally
+    setVotes(updatedVotes);
+    votesRef.current = updatedVotes;
+    currentVotesCountRef.current = updatedVotes.length;
+
+    // Mark student as voted
+    setStudents(updatedStudents);
+    studentsRef.current = updatedStudents;
+    currentVotedCountRef.current = updatedStudents.filter(s => s.hasVoted).length;
 
     // Institutional and superadmin email addresses
     const fromEmail = config.institutionEmail || 'rectoria@ekiraya.edu.co';
@@ -1524,7 +2033,37 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       activeVoter.mesaNumber
     );
 
-    // Broadcast across multiple computers via Central Server API
+    // 1. Direct real-time write of vote + global state + results to Google Sheets
+    const scriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+    if (scriptUrl) {
+      writeVoteToSheets(scriptUrl, {
+        action: 'castVote',
+        studentId: activeVoter.id,
+        studentDoc: activeVoter.documentNumber,
+        studentName: activeVoter.fullName,
+        grade: activeVoter.grade,
+        group: activeVoter.group,
+        mesaNumber: activeVoter.mesaNumber,
+        folioNumber,
+        timestamp,
+        votes: newVotesToAdd.map(v => ({
+          voteToken: v.voteToken,
+          positionId: v.positionId,
+          candidateId: v.candidateId,
+          mesaNumber: v.mesaNumber,
+          hash: v.hash,
+          timestamp: v.timestamp
+        }))
+      }).catch(() => {});
+    }
+
+    pushStateToGoogleSheetsRealtime({
+      votes: updatedVotes,
+      students: updatedStudents,
+      syncResultsTable: true
+    });
+
+    // 2. Broadcast across multiple computers via Central Server API
     try {
       fetch('/api/election/vote', {
         method: 'POST',
@@ -1543,20 +2082,29 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       broadcastChannel.postMessage({ type: 'STATE_REFRESH' });
     }
 
-    // Google Sheets sync is handled authoritatively and centrally by the server on /api/election/vote
-
     return { success: true, certificate };
   };
 
   const updateElectionStatus = async (newStatus: ElectionStatus) => {
     const now = new Date().toISOString();
+    lastLocalMutationRef.current = Date.now();
     currentStatusRef.current = newStatus;
-    setConfig(prev => ({
-      ...prev,
-      status: newStatus,
-      openedAt: newStatus === 'ABIERTA' && !prev.openedAt ? now : prev.openedAt,
-      closedAt: newStatus === 'CERRADA' ? now : prev.closedAt
-    }));
+
+    const nextOpenedAt = newStatus === 'ABIERTA' && !config.openedAt ? now : config.openedAt;
+    const nextClosedAt = newStatus === 'CERRADA' ? now : config.closedAt;
+
+    setConfig(prev => {
+      const updated = {
+        ...prev,
+        status: newStatus,
+        openedAt: nextOpenedAt,
+        closedAt: nextClosedAt
+      };
+      try {
+        localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
 
     addAuditLog(
       newStatus === 'ABIERTA' ? 'APERTURA_MESA' : (newStatus === 'CERRADA' ? 'CIERRE_MESA' : 'SISTEMA_INICIO'),
@@ -1572,11 +2120,19 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       description: newStatus === 'ABIERTA'
         ? 'Apertura formal de urna decretada por la administración. Se habilitan los tarjetones en todas las cabinas.'
         : (newStatus === 'CERRADA'
-          ? 'Cierre formal de urna decretado. No se permiten nuevos votos estudiantiles.'
+          ? 'Cierre formal de urna decretado y registrado en Google Sheets. No se permiten nuevos votos estudiantiles.'
           : 'Declaratoria de escrutinio final iniciada para consolidación de resultados.'),
       source: 'Comisión Electoral (Admin)',
       resolved: true,
       metadata: { newStatus }
+    });
+
+    // Sync immediately to Google Sheets (__SYS_STATE__ + Resultados_Electorales)
+    pushStateToGoogleSheetsRealtime({
+      status: newStatus,
+      openedAt: nextOpenedAt,
+      closedAt: nextClosedAt,
+      syncResultsTable: true
     });
 
     try {
@@ -1587,11 +2143,6 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.config) {
-          setConfig(data.config);
-          currentStatusRef.current = data.config.status;
-          try { localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config)); } catch {}
-        }
         if (data.version) currentVersionRef.current = data.version;
       }
     } catch (err) {
@@ -1623,8 +2174,12 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       id,
       hasVoted: false
     };
-    setStudents(prev => [studentObj, ...prev]);
+    const updatedStudents = [studentObj, ...students];
+    setStudents(updatedStudents);
+    studentsRef.current = updatedStudents;
     addAuditLog('ESTUDIANTE_HABILITADO', 'ADMIN', 'Secretaría Académica', `Estudiante agregado al censo: ${newStudent.fullName} (${newStudent.grade})`);
+
+    pushStateToGoogleSheetsRealtime({ students: updatedStudents, syncVotersTable: true });
 
     fetch('/api/election/add-student', {
       method: 'POST',
@@ -1640,8 +2195,12 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const addCandidate = (newCand: Omit<Candidate, 'id'>) => {
     const id = `cand-${Date.now()}`;
     const candObj: Candidate = { ...newCand, id };
-    setCandidates(prev => [...prev, candObj]);
+    const updatedCands = [...candidates, candObj];
+    setCandidates(updatedCands);
+    candidatesRef.current = updatedCands;
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Inscripción formal de candidatura: ${newCand.fullName} (#${newCand.number})`);
+
+    pushStateToGoogleSheetsRealtime({ candidates: updatedCands });
 
     fetch('/api/election/add-candidate', {
       method: 'POST',
@@ -1655,8 +2214,12 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateCandidate = (updatedCand: Candidate) => {
-    setCandidates(prev => prev.map(c => (c.id === updatedCand.id ? updatedCand : c)));
+    const updatedCands = candidates.map(c => (c.id === updatedCand.id ? updatedCand : c));
+    setCandidates(updatedCands);
+    candidatesRef.current = updatedCands;
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Modificación de candidatura: ${updatedCand.fullName} (#${updatedCand.number})`);
+
+    pushStateToGoogleSheetsRealtime({ candidates: updatedCands });
 
     fetch('/api/election/update-candidate', {
       method: 'POST',
@@ -1682,8 +2245,12 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       };
     }
 
-    setCandidates(prev => prev.filter(c => c.id !== candidateId));
+    const updatedCands = candidates.filter(c => c.id !== candidateId);
+    setCandidates(updatedCands);
+    candidatesRef.current = updatedCands;
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Eliminación formal de candidatura: ${target.fullName} (#${target.number}) de ${target.positionId}`);
+
+    pushStateToGoogleSheetsRealtime({ candidates: updatedCands });
 
     fetch('/api/election/delete-candidate', {
       method: 'POST',
@@ -1713,9 +2280,12 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return { success: true };
     }
 
+    // Search both state admins and INITIAL_ADMINS fallback
+    const allKnownAdmins = [...adminsRef.current, ...INITIAL_ADMINS];
+
     // If username provided, match user and pin
     if (trimmedUser) {
-      const matchedByUser = admins.find(a => 
+      const matchedByUser = allKnownAdmins.find(a => 
         a.status === 'ACTIVO' && 
         (a.username.toLowerCase() === trimmedUser || a.fullName.toLowerCase() === trimmedUser || (a.email && a.email.toLowerCase() === trimmedUser)) &&
         a.pin.trim().toLowerCase() === trimmed.toLowerCase()
@@ -1731,7 +2301,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     // Match by PIN alone or username alone across active admins
-    const matchedByPin = admins.find(a => a.status === 'ACTIVO' && (a.pin.trim().toLowerCase() === trimmed.toLowerCase() || a.username.toLowerCase() === trimmed.toLowerCase()));
+    const matchedByPin = allKnownAdmins.find(a => a.status === 'ACTIVO' && (a.pin.trim().toLowerCase() === trimmed.toLowerCase() || a.username.toLowerCase() === trimmed.toLowerCase()));
     if (matchedByPin) {
       setIsAdminAuthenticated(true);
       try {
@@ -1755,17 +2325,18 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const loginJurado = (mesaNumber: number, name: string, pin: string) => {
     const trimmedPin = pin.trim().toLowerCase();
-    const matchedJurado = jurados.find(j => j.mesaNumber === mesaNumber && j.status === 'ACTIVO');
+    const matchedJurado = juradosRef.current.find(j => j.mesaNumber === mesaNumber && j.status === 'ACTIVO');
     const matchesJuradoPin = matchedJurado ? matchedJurado.pin.toLowerCase() === trimmedPin : false;
-    const valid = trimmedPin === 'jurado2026' || trimmedPin === `mesa0${mesaNumber}` || trimmedPin === `mesa${mesaNumber}` || trimmedPin === '1234' || matchesJuradoPin;
+    const anyJuradoPinMatch = juradosRef.current.find(j => j.status === 'ACTIVO' && j.pin.toLowerCase() === trimmedPin);
+    const valid = trimmedPin === 'jurado2026' || trimmedPin === `mesa0${mesaNumber}` || trimmedPin === `mesa${mesaNumber}` || trimmedPin === '1234' || matchesJuradoPin || Boolean(anyJuradoPinMatch);
     if (valid) {
       setIsJuradoAuthenticated(true);
       setJuradoMesa(mesaNumber);
-      setJuradoName(name || matchedJurado?.fullName || `Jurado Mesa 0${mesaNumber}`);
+      setJuradoName(name || matchedJurado?.fullName || anyJuradoPinMatch?.fullName || `Jurado Mesa 0${mesaNumber}`);
       try {
         localStorage.setItem('ekiraya_jurado_auth', 'true');
         localStorage.setItem('ekiraya_jurado_mesa', mesaNumber.toString());
-        localStorage.setItem('ekiraya_jurado_name', name || matchedJurado?.fullName || `Jurado Mesa 0${mesaNumber}`);
+        localStorage.setItem('ekiraya_jurado_name', name || matchedJurado?.fullName || anyJuradoPinMatch?.fullName || `Jurado Mesa 0${mesaNumber}`);
       } catch {}
       addAuditLog('APERTURA_MESA', 'JURADO', name, `Acreditación exitosa de jurado para Mesa 0${mesaNumber}. Formato E-11 instalado.`, mesaNumber);
       return { success: true };
@@ -1785,41 +2356,89 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Jurados & Admins Management
   const addJurado = (newJurado: Omit<JuradoMember, 'id'>) => {
     const obj: JuradoMember = { ...newJurado, id: `jur-${Date.now()}` };
-    setJurados(prev => [...prev, obj]);
+    const updated = [...jurados, obj];
+    setJurados(updated);
+    juradosRef.current = updated;
+    pushStateToGoogleSheetsRealtime({ jurados: updated });
+    fetch('/api/election/sync-jurados', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jurados: updated })
+    }).catch(() => {});
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Jurado acreditado: ${obj.fullName} (Mesa 0${obj.mesaNumber})`);
   };
 
-  const updateJurado = (updated: JuradoMember) => {
-    setJurados(prev => prev.map(j => j.id === updated.id ? updated : j));
-    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Datos de jurado actualizados: ${updated.fullName} (Mesa 0${updated.mesaNumber})`);
+  const updateJurado = (updatedItem: JuradoMember) => {
+    const updated = jurados.map(j => j.id === updatedItem.id ? updatedItem : j);
+    setJurados(updated);
+    juradosRef.current = updated;
+    pushStateToGoogleSheetsRealtime({ jurados: updated });
+    fetch('/api/election/sync-jurados', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jurados: updated })
+    }).catch(() => {});
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Datos de jurado actualizados: ${updatedItem.fullName} (Mesa 0${updatedItem.mesaNumber})`);
   };
 
   const deleteJurado = (id: string) => {
     const target = jurados.find(j => j.id === id);
-    setJurados(prev => prev.filter(j => j.id !== id));
+    const updated = jurados.filter(j => j.id !== id);
+    setJurados(updated);
+    juradosRef.current = updated;
+    pushStateToGoogleSheetsRealtime({ jurados: updated });
+    fetch('/api/election/sync-jurados', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jurados: updated })
+    }).catch(() => {});
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Comité Electoral', `Jurado retirado de acreditación: ${target?.fullName || id}`);
   };
 
   const addAdmin = (newAdmin: Omit<AdminMember, 'id'>) => {
     const obj: AdminMember = { ...newAdmin, id: `adm-${Date.now()}` };
-    setAdmins(prev => [...prev, obj]);
+    const updated = [...admins, obj];
+    setAdmins(updated);
+    adminsRef.current = updated;
+    pushStateToGoogleSheetsRealtime({ admins: updated });
+    fetch('/api/election/sync-admins', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admins: updated })
+    }).catch(() => {});
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Nuevo administrador registrado: ${obj.fullName} (${obj.username})`);
   };
 
-  const updateAdmin = (updated: AdminMember) => {
-    setAdmins(prev => prev.map(a => a.id === updated.id ? updated : a));
-    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Datos de administrador actualizados: ${updated.fullName}`);
+  const updateAdmin = (updatedItem: AdminMember) => {
+    const updated = admins.map(a => a.id === updatedItem.id ? updatedItem : a);
+    setAdmins(updated);
+    adminsRef.current = updated;
+    pushStateToGoogleSheetsRealtime({ admins: updated });
+    fetch('/api/election/sync-admins', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admins: updated })
+    }).catch(() => {});
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Datos de administrador actualizados: ${updatedItem.fullName}`);
   };
 
   const deleteAdmin = (id: string) => {
     const target = admins.find(a => a.id === id);
-    setAdmins(prev => prev.filter(a => a.id !== id));
+    const updated = admins.filter(a => a.id !== id);
+    setAdmins(updated);
+    adminsRef.current = updated;
+    pushStateToGoogleSheetsRealtime({ admins: updated });
+    fetch('/api/election/sync-admins', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admins: updated })
+    }).catch(() => {});
     addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', `Administrador revocado: ${target?.fullName || id}`);
   };
 
   // Robust Normalization for Sheets without headers or varying column orders
   const normalizeRawAdmins = (rawItems: any[]): AdminMember[] => {
-    return rawItems.map((item, idx) => {
+    return rawItems.filter(item => !isSystemStateRow(item)).map((item, idx) => {
       if (Array.isArray(item)) {
         const textCells = item
           .map((val, c) => ({ col: c, val: String(val !== null && val !== undefined ? val : '').trim() }))
@@ -2122,14 +2741,19 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               receiptFolio: s.receiptFolio,
               isVerifiedByJurado: Boolean(s.hasVoted)
             }));
-            setStudents(mappedStudents);
+            const mergedStudents = mergeStudentsWithSystemState(
+              mappedStudents,
+              latestSheetsSystemStateRef.current
+            );
+            setStudents(mergedStudents);
+            studentsRef.current = mergedStudents;
             fetch('/api/election/sync-students', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ students: mappedStudents })
+              body: JSON.stringify({ students: mergedStudents })
             }).catch(() => {});
-            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Censo de ${mappedStudents.length} votantes cargado exitosamente desde Google Sheets.`);
-            return { success: true, message: `Se cargaron ${mappedStudents.length} votantes desde Sheets.`, count: mappedStudents.length, data: mappedStudents };
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Censo de ${mergedStudents.length} votantes cargado exitosamente desde Google Sheets.`);
+            return { success: true, message: `Se cargaron ${mergedStudents.length} votantes desde Sheets.`, count: mergedStudents.length, data: mergedStudents };
           }
         }
         return res;
@@ -2178,8 +2802,13 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (res.success && res.data) {
           const rawAdmins = res.data.admins || (Array.isArray(res.data) ? res.data : []);
           if (rawAdmins.length > 0) {
-            const normalized = normalizeRawAdmins(rawAdmins);
+            const { cleanAdmins, systemState } = extractSystemStateFromAdmins(rawAdmins);
+            if (systemState) {
+              applySheetsSystemState(systemState);
+            }
+            const normalized = normalizeRawAdmins(cleanAdmins);
             setAdmins(normalized);
+            adminsRef.current = normalized;
             fetch('/api/election/sync-admins', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -2272,10 +2901,24 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
 
         if (finalData.admins && finalData.admins.length > 0) {
-          normAdmToSync = normalizeRawAdmins(finalData.admins);
+          const { cleanAdmins, systemState } = extractSystemStateFromAdmins(finalData.admins);
+          if (systemState) {
+            applySheetsSystemState(systemState);
+          }
+          normAdmToSync = normalizeRawAdmins(cleanAdmins);
           setAdmins(normAdmToSync);
+          adminsRef.current = normAdmToSync;
           counts.admins = normAdmToSync.length;
           anyUpdated = true;
+        }
+
+        if (mappedStudentsToSync.length > 0 && latestSheetsSystemStateRef.current) {
+          mappedStudentsToSync = mergeStudentsWithSystemState(
+            mappedStudentsToSync,
+            latestSheetsSystemStateRef.current
+          );
+          setStudents(mappedStudentsToSync);
+          studentsRef.current = mappedStudentsToSync;
         }
 
         if (anyUpdated) {
@@ -2513,13 +3156,60 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const resetElectionData = () => {
-    setStudents(INITIAL_STUDENTS.map(s => ({ ...s, hasVoted: false, votedAt: undefined, receiptFolio: undefined })));
+    const now = new Date().toISOString();
+    lastLocalMutationRef.current = Date.now();
+    lastSheetsResetAtRef.current = now;
+    currentStatusRef.current = 'ABIERTA';
+
+    // Conservar los estudiantes cargados de Google Sheets pero poniendo sus votos en cero
+    const baseStudents = studentsRef.current.length > 0 ? studentsRef.current : INITIAL_STUDENTS;
+    const resetStudents = baseStudents.map(s => ({
+      ...s,
+      hasVoted: false,
+      votedAt: undefined,
+      receiptFolio: undefined,
+      isVerifiedByJurado: false,
+      verifiedAt: undefined
+    }));
+
+    setStudents(resetStudents);
+    studentsRef.current = resetStudents;
+    currentVotedCountRef.current = 0;
+
     setVotes([]);
+    votesRef.current = [];
+    currentVotesCountRef.current = 0;
+
     setSuperadminInbox([]);
     setActiveVoter(null);
     setLatestCertificate(null);
-    setConfig(INITIAL_CONFIG);
-    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', 'Reinicio completo de urnas a cero. Censo electoral restablecido.');
+
+    setConfig(prev => {
+      const updated: ElectionConfig = {
+        ...prev,
+        status: 'ABIERTA',
+        openedAt: now,
+        closedAt: undefined
+      };
+      try {
+        localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    addAuditLog('SISTEMA_INICIO', 'ADMIN', 'Supervisión Electoral', 'Reinicio completo de urnas a cero. Censo electoral restablecido y sincronizado con Google Sheets.');
+
+    // Registrar inmediatamente en Google Sheets: Urna en cero, Votantes en cero y Resultados en cero
+    pushStateToGoogleSheetsRealtime({
+      status: 'ABIERTA',
+      openedAt: now,
+      closedAt: undefined,
+      resetAt: now,
+      votes: [],
+      students: resetStudents,
+      syncVotersTable: true,
+      syncResultsTable: true
+    });
 
     fetch('/api/election/reset', {
       method: 'POST'
