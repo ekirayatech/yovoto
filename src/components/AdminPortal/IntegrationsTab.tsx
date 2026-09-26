@@ -972,7 +972,22 @@ function doPost(e) {
         }
       }
 
+      if (data.studentEmail && String(data.studentEmail).indexOf("@") !== -1) {
+        try {
+          sendCertificateHtmlEmail(data);
+        } catch (mailErr) {}
+      }
+
       return respondJSON({ status: "SUCCESS", message: "Votos registrados en Urna_Cifrada de Google Sheets." });
+    }
+
+    // 7. ENVÍO DIRECTO DE CERTIFICADO ELECTORAL DESDE EL USUARIO REGISTRADOR
+    if (data.action === "sendCertificateEmail") {
+      sendCertificateHtmlEmail(data);
+      return respondJSON({
+        status: "SUCCESS",
+        message: "Certificado electoral enviado por correo desde el Usuario Registrador (" + (data.fromEmail || "") + ") a " + (data.toEmail || data.studentEmail || "")
+      });
     }
 
     return respondJSON({ status: "SUCCESS", message: "Operación procesada en Google Sheets." });
@@ -981,6 +996,51 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function sendCertificateHtmlEmail(data) {
+  var recipient = data.toEmail || data.studentEmail;
+  if (!recipient || String(recipient).indexOf("@") === -1) return;
+  var fromEmail = data.fromEmail || "mebolanos@cem.edu.co";
+  var registradorName = data.registradorName || "Usuario Registrador";
+  var folio = data.folioNumber || "CE-2026";
+  var studentName = data.studentName || "Estudiante Sufragante";
+  var docStr = (data.documentType || "TI") + " " + (data.documentNumber || "");
+  var gradeStr = (data.grade || "") + (data.group ? " (" + data.group + ")" : "");
+  var mesaStr = "Mesa N° 0" + (data.mesaNumber || 1);
+  var verifyUrl = data.verificationUrl || "https://ais-pre-pmptjnrugumwcgafusy24y-863825148204.us-east1.run.app/?verify=" + encodeURIComponent(folio);
+  var qrImgUrl = "https://quickchart.io/qr?size=220&margin=2&text=" + encodeURIComponent(verifyUrl);
+
+  var htmlBody = "<div style='font-family:Arial,sans-serif;max-width:620px;margin:0 auto;border:2px solid #6b21a8;border-radius:16px;overflow:hidden;background:#ffffff;'>" +
+    "<div style='background:#581c87;color:#ffffff;padding:20px;text-align:center;'>" +
+    "<h2 style='margin:0;font-size:18px;text-transform:uppercase;'>" + (data.schoolName || "COLEGIO EKIRAYÁ - CEM") + "</h2>" +
+    "<p style='margin:4px 0 0;font-size:12px;color:#e9d5ff;'>CERTIFICADO ELECTORAL DIGITAL DE SUFRAGIO • GOBIERNO ESCOLAR 2026</p>" +
+    "</div>" +
+    "<div style='padding:24px;color:#1e293b;font-size:13px;line-height:1.6;'>" +
+    "<p>Estimado(a) <strong>" + studentName + "</strong>,</p>" +
+    "<p>El <strong>Usuario Registrador (" + registradorName + " — " + fromEmail + ")</strong> certifica oficialmente que usted ejerció su derecho constitucional e institucional al voto:</p>" +
+    "<table style='width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;'>" +
+    "<tr><td style='padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;'>Folio Electoral Único:</td><td style='padding:8px;border-bottom:1px solid #e2e8f0;font-weight:bold;color:#6b21a8;font-family:monospace;'>" + folio + "</td></tr>" +
+    "<tr><td style='padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;'>Sufragante:</td><td style='padding:8px;border-bottom:1px solid #e2e8f0;font-weight:bold;'>" + studentName + "</td></tr>" +
+    "<tr><td style='padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;'>Documento:</td><td style='padding:8px;border-bottom:1px solid #e2e8f0;font-family:monospace;'>" + docStr + "</td></tr>" +
+    "<tr><td style='padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;'>Grado y Grupo:</td><td style='padding:8px;border-bottom:1px solid #e2e8f0;'>" + gradeStr + "</td></tr>" +
+    "<tr><td style='padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;'>Mesa Receptora:</td><td style='padding:8px;border-bottom:1px solid #e2e8f0;font-weight:bold;'>" + mesaStr + "</td></tr>" +
+    "<tr><td style='padding:8px;border-bottom:1px solid #e2e8f0;color:#64748b;'>Remitente (Registrador):</td><td style='padding:8px;border-bottom:1px solid #e2e8f0;font-family:monospace;color:#047857;'>" + fromEmail + " (" + registradorName + ")</td></tr>" +
+    "</table>" +
+    "<div style='text-align:center;margin:20px 0;padding:16px;background:#f8fafc;border-radius:12px;border:1px solid #e2e8f0;'>" +
+    "<img src='" + qrImgUrl + "' alt='QR Verificación' width='160' height='160' style='display:block;margin:0 auto 8px;' />" +
+    "<a href='" + verifyUrl + "' style='display:inline-block;margin-top:8px;padding:10px 18px;background:#6b21a8;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold;font-size:12px;'>Verificar Certificado en Línea</a>" +
+    "</div>" +
+    "<p style='font-size:11px;color:#64748b;font-family:monospace;word-break:break-all;'>HASH SHA-256: " + (data.verificationHash || "") + "</p>" +
+    "</div></div>";
+
+  MailApp.sendEmail({
+    to: recipient,
+    replyTo: fromEmail,
+    name: registradorName + " (Registrador Electoral Ekirayá)",
+    subject: "Certificado Electoral de Sufragio - Folio " + folio + " - " + studentName,
+    htmlBody: htmlBody
+  });
 }
 
 function respondJSON(obj) {

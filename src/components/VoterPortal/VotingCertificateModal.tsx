@@ -51,10 +51,11 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
   }, []);
 
   const certStation = getStationForMesa(certificate.mesaNumber);
-  const qrUrl = generateCertificateQRCode(certificate.verificationHash);
+  const fullCertForQr: VotingCertificate = { ...certificate, fromEmail: senderEmail };
+  const qrUrl = generateCertificateQRCode(fullCertForQr);
 
   const handleDownloadPDF = () => {
-    generateCertificatePDF({ ...certificate, fromEmail: senderEmail }, senderEmail, config.superadminEmail);
+    generateCertificatePDF(fullCertForQr, senderEmail, config.superadminEmail);
   };
 
   const handlePrint = () => {

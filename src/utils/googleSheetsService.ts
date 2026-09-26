@@ -588,3 +588,32 @@ export async function recordResultsToSheets(
     ...data
   });
 }
+
+/** Enviar Correo Real con Certificado Electoral desde el Usuario Registrador vía Google Apps Script */
+export async function sendCertificateEmailViaSheets(
+  scriptUrl: string,
+  data: {
+    toEmail: string;
+    fromEmail: string;
+    registradorName: string;
+    superadminEmail?: string;
+    folioNumber: string;
+    studentName: string;
+    documentType: string;
+    documentNumber: string;
+    grade: string;
+    group: string;
+    mesaNumber: number;
+    timestamp: string;
+    verificationHash: string;
+    verificationUrl: string;
+    schoolName: string;
+    daneCode: string;
+    rectorName: string;
+  }
+): Promise<SheetsTestResult> {
+  return writeToSheets(scriptUrl, {
+    action: 'sendCertificateEmail',
+    ...data
+  });
+}

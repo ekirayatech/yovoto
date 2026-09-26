@@ -1335,7 +1335,7 @@ export const INITIAL_CONFIG: ElectionConfig = {
     syncStatus: 'connected'
   },
   encryptionKeyFingerprint: 'SHA256:4a8b79f8e712a10b45920c8de15c32890fabc4231a',
-  institutionEmail: 'andres.galindo@ekiraya.edu.co',
+  institutionEmail: 'mebolanos@cem.edu.co',
   superadminEmail: 'rectoria@ekiraya.edu.co'
 };
 
@@ -1373,7 +1373,7 @@ export function resolveRegistradorEmail(
   }
 
   return {
-    email: fallbackEmail || 'andres.galindo@ekiraya.edu.co',
+    email: fallbackEmail || 'mebolanos@cem.edu.co',
     fullName: 'Lic. Andrés Mauricio Galindo (Registrador)',
     username: 'admincem'
   };
@@ -1434,7 +1434,7 @@ export const INITIAL_ADMINS: AdminMember[] = [
     username: 'admincem',
     role: 'REGISTRADOR',
     pin: 'admin2026',
-    email: 'andres.galindo@ekiraya.edu.co',
+    email: 'mebolanos@cem.edu.co',
     status: 'ACTIVO',
     lastAccessAt: '2026-09-26T08:05:00.000Z'
   },

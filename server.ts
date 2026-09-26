@@ -649,7 +649,10 @@ app.post('/api/election/vote', (req: Request, res: Response) => {
   // Automatic email dispatch from Usuario Registrador
   const registradorInfo = resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail);
   const fromEmail = registradorInfo.email;
-  const toEmail = serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
+  const toEmail =
+    student.email && student.email.includes('@')
+      ? student.email
+      : serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co';
   const verificationHash = `${lastHash.slice(0, 16)}-M${student.mesaNumber}-${student.documentNumber}`;
 
   const cert: VotingCertificate = {
@@ -775,8 +778,8 @@ app.post('/api/election/verify-student', (req: Request, res: Response) => {
 });
 
 // API: Send or log certificate email delivery (from Usuario Registrador)
-app.post('/api/election/send-certificate-email', (req: Request, res: Response) => {
-  const { email, cert, fromEmail } = req.body;
+app.post('/api/election/send-certificate-email', async (req: Request, res: Response) => {
+  const { email, cert, fromEmail, registradorName } = req.body;
   if (!email || !cert) {
     res.status(400).json({ success: false, error: 'Email y datos del certificado son requeridos.' });
     return;
@@ -784,7 +787,76 @@ app.post('/api/election/send-certificate-email', (req: Request, res: Response) =
 
   const registradorInfo = resolveRegistradorEmail(serverAdmins, serverConfig.institutionEmail);
   const senderEmail = fromEmail || cert.fromEmail || registradorInfo.email;
+  const senderName = registradorName || registradorInfo.fullName;
   const timestamp = new Date().toISOString();
+
+  const updatedCert: VotingCertificate = {
+    ...cert,
+    fromEmail: senderEmail,
+    studentEmail: email
+  };
+
+  const existingIdx = serverSuperadminInbox.findIndex(m => m.folioNumber === cert.folioNumber);
+  if (existingIdx >= 0) {
+    serverSuperadminInbox[existingIdx] = {
+      ...serverSuperadminInbox[existingIdx],
+      fromEmail: senderEmail,
+      toEmail: email,
+      certificate: updatedCert,
+      status: 'ENTREGADO'
+    };
+  } else {
+    const inboxMsg: CertificateInboxMessage = {
+      id: `inbox-cert-${Date.now()}`,
+      folioNumber: cert.folioNumber,
+      timestamp: cert.timestamp || timestamp,
+      fromEmail: senderEmail,
+      toEmail: email,
+      studentId: `est-${cert.documentNumber}`,
+      studentName: cert.studentName,
+      documentType: cert.documentType,
+      documentNumber: cert.documentNumber,
+      grade: cert.grade,
+      group: cert.group,
+      mesaNumber: cert.mesaNumber,
+      verificationHash: cert.verificationHash,
+      certificate: updatedCert,
+      status: 'ENTREGADO',
+      read: false,
+      subject: `Certificado Electoral de Sufragio - Folio ${cert.folioNumber} - ${cert.studentName} (${cert.grade} - ${cert.group})`
+    };
+    serverSuperadminInbox = [inboxMsg, ...serverSuperadminInbox];
+  }
+
+  // Forward email dispatch to Google Apps Script if configured
+  const scriptUrl = serverConfig.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+  if (scriptUrl && email.includes('@')) {
+    fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'sendCertificateEmail',
+        toEmail: email,
+        studentEmail: email,
+        fromEmail: senderEmail,
+        registradorName: senderName,
+        superadminEmail: serverConfig.superadminEmail || 'rectoria@ekiraya.edu.co',
+        folioNumber: updatedCert.folioNumber,
+        studentName: updatedCert.studentName,
+        documentType: updatedCert.documentType,
+        documentNumber: updatedCert.documentNumber,
+        grade: updatedCert.grade,
+        group: updatedCert.group,
+        mesaNumber: updatedCert.mesaNumber,
+        timestamp: updatedCert.timestamp,
+        verificationHash: updatedCert.verificationHash,
+        schoolName: updatedCert.schoolName || serverConfig.institutionName,
+        daneCode: updatedCert.daneCode || serverConfig.daneCode,
+        rectorName: updatedCert.rectorName || serverConfig.rectorName
+      })
+    }).catch(() => {});
+  }
+
   const newLog: AuditLog = {
     id: `log-email-${Date.now()}`,
     timestamp,

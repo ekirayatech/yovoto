@@ -27,7 +27,13 @@ import {
   TerminalInfo,
   VotingCertificate
 } from '../types/election';
-import { calculateBlockHash, generateFolioCode, sha256, simpleFastHash } from '../utils/crypto';
+import {
+  buildCertificateVerificationUrl,
+  calculateBlockHash,
+  generateFolioCode,
+  sha256,
+  simpleFastHash
+} from '../utils/crypto';
 import {
   buildVotedAndVerifiedMaps,
   deserializeVotesFromSheets,
@@ -41,6 +47,7 @@ import {
   readCensusFromSheets,
   readJuradosFromSheets,
   recordResultsToSheets as recordResultsToSheetsDirect,
+  sendCertificateEmailViaSheets,
   serializeVotesForSheets,
   setCachedSystemStateEnvelope,
   SheetsSystemStateEnvelope,
@@ -466,7 +473,112 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [connectedComputersCount, setConnectedComputersCount] = useState<number>(1);
   const [isMultiComputerLive, setIsMultiComputerLive] = useState<boolean>(false);
   const [terminalsList, setTerminalsList] = useState<TerminalInfo[]>([]);
-  const [superadminInbox, setSuperadminInbox] = useState<CertificateInboxMessage[]>([]);
+  const [superadminInbox, setSuperadminInbox] = useState<CertificateInboxMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem('ekiraya_superadmin_inbox_v2');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Automatically synchronize superadminInbox with all voted students and the active Registrador email
+  useEffect(() => {
+    const registradorInfo = resolveRegistradorEmail(admins, config.institutionEmail);
+    const fromEmail = registradorInfo.email;
+    const defaultToEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
+    const votedStudents = students.filter(s => s.hasVoted);
+
+    if (votedStudents.length === 0) {
+      if (superadminInbox.length > 0 && votes.length === 0) {
+        setSuperadminInbox([]);
+        try {
+          localStorage.removeItem('ekiraya_superadmin_inbox_v2');
+        } catch {}
+      }
+      return;
+    }
+
+    setSuperadminInbox(prev => {
+      const existingByStudentOrFolio = new Map<string, CertificateInboxMessage>();
+      for (const msg of prev) {
+        if (msg.studentId) existingByStudentOrFolio.set(msg.studentId, msg);
+        if (msg.folioNumber) existingByStudentOrFolio.set(msg.folioNumber, msg);
+      }
+
+      let changed = false;
+      const updatedList: CertificateInboxMessage[] = votedStudents.map((st, idx) => {
+        const folio =
+          st.receiptFolio ||
+          `CE-2026-M${String(st.mesaNumber).padStart(2, '0')}-${st.documentNumber.slice(-4)}${10 + idx}`;
+        const existing = existingByStudentOrFolio.get(st.id) || existingByStudentOrFolio.get(folio);
+        const timestamp = st.votedAt || existing?.timestamp || new Date().toISOString();
+        const verificationHash =
+          existing?.verificationHash ||
+          `${simpleFastHash(st.documentNumber + folio).slice(0, 32)}-M${st.mesaNumber}-${st.documentNumber}`;
+        const recipientEmail = st.email && st.email.includes('@') ? st.email : (existing?.toEmail || defaultToEmail);
+
+        const cert: VotingCertificate = {
+          folioNumber: folio,
+          studentName: st.fullName,
+          documentType: st.documentType,
+          documentNumber: st.documentNumber,
+          grade: st.grade,
+          group: st.group,
+          mesaNumber: st.mesaNumber,
+          studentEmail: st.email,
+          timestamp,
+          verificationHash,
+          schoolName: config.institutionName,
+          daneCode: config.daneCode,
+          rectorName: config.rectorName,
+          fromEmail,
+          sentToSuperadminAt: timestamp
+        };
+
+        if (
+          !existing ||
+          existing.fromEmail !== fromEmail ||
+          existing.toEmail !== recipientEmail ||
+          existing.certificate?.fromEmail !== fromEmail
+        ) {
+          changed = true;
+        }
+
+        return {
+          id: existing?.id || `inbox-cert-${st.id}-${folio}`,
+          folioNumber: folio,
+          timestamp,
+          fromEmail,
+          toEmail: recipientEmail,
+          studentId: st.id,
+          studentName: st.fullName,
+          documentType: st.documentType,
+          documentNumber: st.documentNumber,
+          grade: st.grade,
+          group: st.group,
+          mesaNumber: st.mesaNumber,
+          verificationHash,
+          certificate: cert,
+          status: 'ENTREGADO',
+          read: existing?.read ?? false,
+          subject: `Certificado Electoral de Sufragio - Folio ${folio} - ${st.fullName} (${st.grade} - ${st.group})`
+        };
+      });
+
+      if (!changed && updatedList.length === prev.length) {
+        return prev;
+      }
+
+      const sorted = updatedList.sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      try {
+        localStorage.setItem('ekiraya_superadmin_inbox_v2', JSON.stringify(sorted));
+      } catch {}
+      return sorted;
+    });
+  }, [students, admins, config.institutionEmail, config.superadminEmail, config.institutionName, config.daneCode, config.rectorName, votes.length]);
 
   // Modals for Multi-Device and Cloud Backup
   const [isMultiDeviceModalOpen, setIsMultiDeviceModalOpen] = useState<boolean>(false);
@@ -963,6 +1075,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (adm.email && adm.email.includes('@')) {
         if (adm.id) adminEmails[adm.id] = adm.email.trim();
         if (adm.username) adminEmails[adm.username.toLowerCase()] = adm.email.trim();
+        if (adm.role) adminEmails[`ROLE_${adm.role}`] = adm.email.trim();
       }
     }
 
@@ -1498,6 +1611,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const rawAdmins = admRes.data.admins || (Array.isArray(admRes.data) ? admRes.data : []);
         if (rawAdmins.length > 0) {
           const { cleanAdmins, systemState } = extractSystemStateFromAdmins(rawAdmins);
+          if (systemState) {
+            latestSheetsSystemStateRef.current = systemState;
+            setCachedSystemStateEnvelope(systemState);
+          }
           if (cleanAdmins.length > 0) {
             const normAdmins = normalizeRawAdmins(cleanAdmins);
             const currentAdminsJson = JSON.stringify(adminsRef.current);
@@ -1998,13 +2115,16 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setLatestCertificate(certificate);
 
-    // Automatic dispatch to Superadministrator inbox
+    // Automatic dispatch from Registrador to Voter and Superadministrator inbox
+    const primaryRecipientEmail =
+      activeVoter.email && activeVoter.email.includes('@') ? activeVoter.email : toSuperadminEmail;
+
     const inboxMessage: CertificateInboxMessage = {
       id: `inbox-${Date.now()}-${folioNumber}`,
       folioNumber,
       timestamp,
       fromEmail,
-      toEmail: toSuperadminEmail,
+      toEmail: primaryRecipientEmail,
       studentId: activeVoter.id,
       studentName: activeVoter.fullName,
       documentType: activeVoter.documentType,
@@ -2019,11 +2139,18 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       subject: `Certificado Electoral de Sufragio - Folio ${folioNumber} - ${activeVoter.fullName} (${activeVoter.grade} - ${activeVoter.group})`
     };
 
-    setSuperadminInbox(prev => [inboxMessage, ...prev.filter(m => m.folioNumber !== folioNumber)]);
+    setSuperadminInbox(prev => {
+      const next = [inboxMessage, ...prev.filter(m => m.folioNumber !== folioNumber)];
+      try {
+        localStorage.setItem('ekiraya_superadmin_inbox_v2', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
 
-    // Automatic email delivery of voting certificate to voter's registered email
-    if (activeVoter.email) {
-      sendCertificateByEmail(activeVoter.email, certificate).catch(err => {
+    // Automatic email delivery of voting certificate to voter's registered email from Registrador
+    const targetVoterEmail = activeVoter.email && activeVoter.email.includes('@') ? activeVoter.email : '';
+    if (targetVoterEmail) {
+      sendCertificateByEmail(targetVoterEmail, certificate).catch(err => {
         console.warn('Error en el envío automático del certificado al correo del estudiante:', err);
       });
     }
@@ -2051,11 +2178,22 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         action: 'castVote',
         studentId: activeVoter.id,
         studentDoc: activeVoter.documentNumber,
+        documentType: activeVoter.documentType,
+        documentNumber: activeVoter.documentNumber,
         studentName: activeVoter.fullName,
+        studentEmail: activeVoter.email || '',
+        toEmail: activeVoter.email || '',
+        fromEmail,
+        registradorName: registradorInfo.fullName,
         grade: activeVoter.grade,
         group: activeVoter.group,
         mesaNumber: activeVoter.mesaNumber,
         folioNumber,
+        verificationHash,
+        verificationUrl: buildCertificateVerificationUrl(certificate),
+        schoolName: config.institutionName,
+        daneCode: config.daneCode,
+        rectorName: config.rectorName,
         timestamp,
         votes: newVotesToAdd.map(v => ({
           voteToken: v.voteToken,
@@ -2535,6 +2673,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         item.Correo ||
         envEmails[id] ||
         envEmails[username] ||
+        envEmails[`ROLE_${role}`] ||
         existingMatch?.email ||
         (username.includes('@') ? username : '');
       const documentNumber = String(item.documentNumber || item.documento || item.cedula || existingMatch?.documentNumber || '');
@@ -3108,9 +3247,79 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const senderEmail = cert.fromEmail || registradorInfo.email;
     const updatedCert: VotingCertificate = {
       ...cert,
-      fromEmail: senderEmail
+      fromEmail: senderEmail,
+      studentEmail: email || cert.studentEmail
     };
 
+    // Update certificate message in Registrador / Superadmin Inbox immediately
+    setSuperadminInbox(prev => {
+      const exists = prev.some(m => m.folioNumber === cert.folioNumber);
+      let next: CertificateInboxMessage[];
+      if (exists) {
+        next = prev.map(m =>
+          m.folioNumber === cert.folioNumber
+            ? {
+                ...m,
+                fromEmail: senderEmail,
+                toEmail: email,
+                certificate: updatedCert,
+                status: 'ENTREGADO'
+              }
+            : m
+        );
+      } else {
+        const newMsg: CertificateInboxMessage = {
+          id: `inbox-${Date.now()}-${cert.folioNumber}`,
+          folioNumber: cert.folioNumber,
+          timestamp: cert.timestamp || new Date().toISOString(),
+          fromEmail: senderEmail,
+          toEmail: email,
+          studentId: `est-${cert.documentNumber}`,
+          studentName: cert.studentName,
+          documentType: cert.documentType,
+          documentNumber: cert.documentNumber,
+          grade: cert.grade,
+          group: cert.group,
+          mesaNumber: cert.mesaNumber,
+          verificationHash: cert.verificationHash,
+          certificate: updatedCert,
+          status: 'ENTREGADO',
+          read: false,
+          subject: `Certificado Electoral de Sufragio - Folio ${cert.folioNumber} - ${cert.studentName} (${cert.grade} - ${cert.group})`
+        };
+        next = [newMsg, ...prev];
+      }
+      try {
+        localStorage.setItem('ekiraya_superadmin_inbox_v2', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    // 1. Dispatch via Google Apps Script (sends real HTML email from Registrador's Google account)
+    const scriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+    if (scriptUrl && email && email.includes('@')) {
+      sendCertificateEmailViaSheets(scriptUrl, {
+        toEmail: email,
+        fromEmail: senderEmail,
+        registradorName: registradorInfo.fullName,
+        superadminEmail: config.superadminEmail || 'rectoria@ekiraya.edu.co',
+        folioNumber: updatedCert.folioNumber,
+        studentName: updatedCert.studentName,
+        documentType: updatedCert.documentType,
+        documentNumber: updatedCert.documentNumber,
+        grade: updatedCert.grade,
+        group: updatedCert.group,
+        mesaNumber: updatedCert.mesaNumber,
+        timestamp: updatedCert.timestamp,
+        verificationHash: updatedCert.verificationHash,
+        verificationUrl: buildCertificateVerificationUrl(updatedCert),
+        schoolName: updatedCert.schoolName || config.institutionName,
+        daneCode: updatedCert.daneCode || config.daneCode,
+        rectorName: updatedCert.rectorName || config.rectorName
+      }).catch(err => console.warn('Aviso al despachar correo vía Apps Script:', err));
+    }
+
+    // 2. Notify local backend server
     try {
       await fetch('/api/election/send-certificate-email', {
         method: 'POST',

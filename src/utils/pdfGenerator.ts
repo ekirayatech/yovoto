@@ -4,35 +4,36 @@ import { Candidate, ElectionConfig, EncryptedVote, Position, Student, VotingCert
 import { generateCertificateQRCode, getQRCodeMatrix } from './crypto';
 
 /**
- * Renders a crisp, native vector QR Code directly inside jsPDF with zero dependencies or external assets
+ * Renders a crisp, native vector ISO/IEC 18004 QR Code directly inside jsPDF
  */
-function drawVectorQRCode(doc: jsPDF, hash: string, x: number, y: number, sizeMm: number) {
-  const matrix = getQRCodeMatrix(hash);
-  const n = matrix.length; // 21
-  const cell = sizeMm / n;
+function drawVectorQRCode(
+  doc: jsPDF,
+  input: string | Partial<VotingCertificate>,
+  x: number,
+  y: number,
+  sizeMm: number
+) {
+  const matrix = getQRCodeMatrix(input);
+  const n = matrix.length;
+  const quietModules = 2;
+  const totalModules = n + quietModules * 2;
+  const cell = sizeMm / totalModules;
 
-  // Background white box
+  // Background white box (includes quiet zone)
   doc.setFillColor(255, 255, 255);
   doc.rect(x, y, sizeMm, sizeMm, 'F');
 
-  // Draw cells
+  // Draw unobstructed QR modules for 100% camera scannability
   doc.setFillColor(15, 23, 42); // slate-900
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       if (matrix[r][c]) {
-        doc.rect(x + c * cell, y + r * cell, cell + 0.05, cell + 0.05, 'F');
+        const rx = x + (c + quietModules) * cell;
+        const ry = y + (r + quietModules) * cell;
+        doc.rect(rx, ry, cell + 0.04, cell + 0.04, 'F');
       }
     }
   }
-
-  // Small center verification shield in purple & white
-  const centerSize = cell * 3.5;
-  const cx = x + sizeMm / 2 - centerSize / 2;
-  const cy = y + sizeMm / 2 - centerSize / 2;
-  doc.setFillColor(255, 255, 255);
-  doc.roundedRect(cx, cy, centerSize, centerSize, 0.5, 0.5, 'F');
-  doc.setFillColor(126, 34, 206);
-  doc.roundedRect(cx + 0.35, cy + 0.35, centerSize - 0.7, centerSize - 0.7, 0.35, 0.35, 'F');
 }
 
 /**
@@ -179,7 +180,7 @@ export function generateCertificatePDF(cert: VotingCertificate, institutionalEma
   doc.text('AUDITORÍA QR', 177.5, 41.8, { align: 'center' });
 
   // Native Vector QR Code (25mm x 25mm)
-  drawVectorQRCode(doc, cert.verificationHash, 165, 46.5, 25);
+  drawVectorQRCode(doc, { ...cert, fromEmail: fromEmailStr }, 165, 46.5, 25);
 
   // QR Validation Subtitle
   doc.setFont('helvetica', 'bold');

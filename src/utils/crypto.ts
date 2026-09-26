@@ -1,7 +1,18 @@
 /**
- * Cryptographic and Hashing Utilities for Colombian School Election System
- * Enforces End-to-End Integrity, Blind Signatures & SHA-256 Blockchain-style Audit Trails
+ * Cryptographic, Hashing & ISO/IEC 18004 Real QR Code Utilities
+ * for Colombian School Election System (Colegio Ekirayá - CEM)
  */
+import qrcodePkg from 'qrcode-generator';
+import { VotingCertificate } from '../types/election';
+
+const qrcode: any = (qrcodePkg as any)?.default || qrcodePkg;
+
+// Enable UTF-8 encoding in qrcode-generator
+try {
+  if (qrcode && qrcode.stringToBytesFuncs && qrcode.stringToBytesFuncs['UTF-8']) {
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+  }
+} catch {}
 
 // Fallback SHA-256 for synchronous fast execution when needed
 export function simpleFastHash(str: string): string {
@@ -55,82 +66,114 @@ export function calculateBlockHash(prevHash: string, voteData: {
 }
 
 /**
- * Generate a standalone SVG Data URL QR Code representing the voting certificate verification
- * No external API required, works 100% offline & inside iframe
+ * Builds a real, scannable verification URL for a voting certificate
+ * When scanned with any phone camera, opens the app's official verification view.
  */
-export function getQRCodeMatrix(verificationUrl: string): boolean[][] {
-  const size = 21;
-  const hash = simpleFastHash(verificationUrl);
-  const matrix: boolean[][] = Array(size).fill(false).map(() => Array(size).fill(false));
+export function buildCertificateVerificationUrl(
+  input: string | Partial<VotingCertificate>
+): string {
+  const defaultOrigin = 'https://ais-pre-pmptjnrugumwcgafusy24y-863825148204.us-east1.run.app';
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : defaultOrigin;
 
-  function drawFinderPattern(row: number, col: number) {
-    for (let r = 0; r < 7; r++) {
-      for (let c = 0; c < 7; c++) {
-        if (
-          r === 0 || r === 6 || c === 0 || c === 6 ||
-          (r >= 2 && r <= 4 && c >= 2 && c <= 4)
-        ) {
-          matrix[row + r][col + c] = true;
-        } else {
-          matrix[row + r][col + c] = false;
-        }
-      }
+  if (typeof input === 'string') {
+    if (input.startsWith('http://') || input.startsWith('https://')) {
+      return input;
     }
+    return `${origin}/?verify=${encodeURIComponent(input)}`;
   }
 
-  drawFinderPattern(0, 0);
-  drawFinderPattern(0, size - 7);
-  drawFinderPattern(size - 7, 0);
-
-  for (let i = 8; i < size - 8; i++) {
-    matrix[6][i] = i % 2 === 0;
-    matrix[i][6] = i % 2 === 0;
+  const params = new URLSearchParams();
+  if (input.folioNumber) params.set('verify', input.folioNumber);
+  if (input.studentName) params.set('name', input.studentName);
+  if (input.documentNumber) {
+    params.set('doc', `${input.documentType || 'TI'} ${input.documentNumber}`.trim());
+  }
+  if (input.grade) {
+    params.set('grade', `${input.grade}${input.group ? ' - ' + input.group : ''}`);
+  }
+  if (input.mesaNumber !== undefined) {
+    params.set('mesa', String(input.mesaNumber));
+  }
+  if (input.fromEmail) {
+    params.set('from', input.fromEmail);
+  }
+  if (input.verificationHash) {
+    params.set('hash', input.verificationHash.slice(0, 16));
   }
 
-  let bitIdx = 0;
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const inFinder1 = r < 8 && c < 8;
-      const inFinder2 = r < 8 && c >= size - 8;
-      const inFinder3 = r >= size - 8 && c < 8;
-      const inTiming = r === 6 || c === 6;
-
-      if (!inFinder1 && !inFinder2 && !inFinder3 && !inTiming) {
-        const charCode = hash.charCodeAt(bitIdx % hash.length);
-        matrix[r][c] = (charCode + r * 7 + c * 13) % 3 === 0;
-        bitIdx++;
-      }
-    }
-  }
-
-  return matrix;
+  return `${origin}/?${params.toString()}`;
 }
 
-export function generateCertificateQRCode(verificationUrl: string): string {
-  const size = 21;
-  const matrix = getQRCodeMatrix(verificationUrl);
+/**
+ * Generates a real, standard-compliant ISO/IEC 18004 QR Code 2D boolean matrix
+ * using Reed-Solomon error correction so any smartphone camera can scan it.
+ */
+export function getQRCodeMatrix(input: string | Partial<VotingCertificate>): boolean[][] {
+  const payload = buildCertificateVerificationUrl(input);
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(payload);
+    qr.make();
+    const count = qr.getModuleCount();
+    const matrix: boolean[][] = [];
+    for (let r = 0; r < count; r++) {
+      const row: boolean[] = [];
+      for (let c = 0; c < count; c++) {
+        row.push(qr.isDark(r, c));
+      }
+      matrix.push(row);
+    }
+    return matrix;
+  } catch (err) {
+    console.error('Error generating QR code matrix:', err);
+    // Fallback minimal valid QR for folio/hash only
+    const qrFallback = qrcode(0, 'L');
+    const shortStr = typeof input === 'string' ? input.slice(0, 64) : (input.folioNumber || 'CE-2026');
+    qrFallback.addData(shortStr);
+    qrFallback.make();
+    const count = qrFallback.getModuleCount();
+    const matrix: boolean[][] = [];
+    for (let r = 0; r < count; r++) {
+      const row: boolean[] = [];
+      for (let c = 0; c < count; c++) {
+        row.push(qrFallback.isDark(r, c));
+      }
+      matrix.push(row);
+    }
+    return matrix;
+  }
+}
 
-  const cellSize = 10;
-  const quietZone = 20;
+/**
+ * Generates a crisp, scannable SVG Data URL QR Code with a 4-module quiet zone
+ * and zero center obstruction for 100% compatibility with iOS/Android cameras.
+ */
+export function generateCertificateQRCode(input: string | Partial<VotingCertificate>): string {
+  const matrix = getQRCodeMatrix(input);
+  const size = matrix.length;
+
+  const cellSize = 8;
+  const quietZoneModules = 4;
+  const quietZone = quietZoneModules * cellSize;
   const fullSize = size * cellSize + quietZone * 2;
-  
-  let rects = '';
+
+  let pathData = '';
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       if (matrix[r][c]) {
         const x = quietZone + c * cellSize;
         const y = quietZone + r * cellSize;
-        rects += `<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" fill="#0f172a" />`;
+        pathData += `M${x},${y}h${cellSize}v${cellSize}h-${cellSize}z`;
       }
     }
   }
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${fullSize} ${fullSize}" width="180" height="180">
-    <rect width="${fullSize}" height="${fullSize}" fill="#ffffff" rx="12" />
-    ${rects}
-    <circle cx="${fullSize/2}" cy="${fullSize/2}" r="14" fill="#ffffff" />
-    <circle cx="${fullSize/2}" cy="${fullSize/2}" r="11" fill="#0284c7" />
-    <path d="M${fullSize/2 - 4} ${fullSize/2} L${fullSize/2 - 1} ${fullSize/2 + 3} L${fullSize/2 + 5} ${fullSize/2 - 3}" stroke="#ffffff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${fullSize} ${fullSize}" width="240" height="240" shape-rendering="crispEdges">
+    <rect width="${fullSize}" height="${fullSize}" fill="#ffffff" rx="8" />
+    <path d="${pathData}" fill="#0f172a" />
   </svg>`;
 
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
