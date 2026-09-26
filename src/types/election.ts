@@ -72,6 +72,32 @@ export interface AuditLog {
   status: 'VERIFICADO' | 'AUDITADO' | 'ALERTA';
 }
 
+export type SystemEventType = 
+  | 'URNA_STATUS' 
+  | 'SYNC_CONFLICT' 
+  | 'SYNC_RESOLVED' 
+  | 'SHEETS_SYNC' 
+  | 'TERMINAL_NETWORK' 
+  | 'DOUBLE_VOTE_BLOCKED' 
+  | 'AUDIT_INTEGRITY'
+  | 'CENSUS_UPDATE';
+
+export type SystemEventSeverity = 'INFO' | 'SUCCESS' | 'WARNING' | 'ERROR';
+
+export interface SystemEvent {
+  id: string;
+  timestamp: string;
+  type: SystemEventType;
+  severity: SystemEventSeverity;
+  title: string;
+  description: string;
+  source: string;
+  terminalId?: string;
+  mesaNumber?: number;
+  resolved?: boolean;
+  metadata?: Record<string, any>;
+}
+
 export interface VotingCertificate {
   folioNumber: string;
   studentName: string;

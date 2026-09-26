@@ -1,4 +1,5 @@
 import {
+  Activity,
   AlertTriangle,
   Award,
   BarChart3,
@@ -12,6 +13,7 @@ import {
   Lock,
   PauseCircle,
   PlayCircle,
+  Radio,
   RefreshCw,
   RotateCcw,
   Scale,
@@ -34,17 +36,29 @@ import { JuradosManagerTab } from './JuradosManagerTab';
 import { LiveResultsTab } from './LiveResultsTab';
 import { OfficialActasTab } from './OfficialActasTab';
 import { SuperadminInboxTab } from './SuperadminInboxTab';
+import { SystemEventsLogTab } from './SystemEventsLogTab';
 import { UnifiedSheetsImportModal } from './UnifiedSheetsImportModal';
 import { VoterAnalyticsTab } from './VoterAnalyticsTab';
 
-type AdminTab = 'results' | 'analytics' | 'inbox' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'integrations';
+type AdminTab = 'results' | 'analytics' | 'inbox' | 'actas' | 'census' | 'candidates' | 'jurados' | 'admins' | 'audit' | 'system-logs' | 'integrations';
 
 export const AdminDashboard: React.FC = () => {
-  const { config, updateElectionStatus, resetElectionData, students, votes, superadminInbox } = useElection();
+  const {
+    config,
+    updateElectionStatus,
+    resetElectionData,
+    students,
+    votes,
+    superadminInbox,
+    systemEvents,
+    connectedComputersCount
+  } = useElection();
   const [currentTab, setCurrentTab] = useState<AdminTab>('results');
   const [isSheetsImportOpen, setIsSheetsImportOpen] = useState<boolean>(false);
 
   const unreadCertificates = superadminInbox.filter(m => !m.read).length;
+  const activeConflictsCount = systemEvents.filter(e => e.type === 'SYNC_CONFLICT' && !e.resolved).length;
+  const latestEvent = systemEvents[0];
 
   const handleStatusChange = (newStatus: ElectionStatus) => {
     if (newStatus === 'CERRADA' && !confirm('¿Está seguro de cerrar las urnas? Los estudiantes ya no podrán emitir más votos.')) {
@@ -151,6 +165,7 @@ export const AdminDashboard: React.FC = () => {
           {[
             { id: 'results', label: 'Resultados en Vivo', icon: BarChart3 },
             { id: 'analytics', label: 'Voter Analytics', icon: TrendingUp },
+            { id: 'system-logs', label: 'Log de Eventos del Sistema', icon: Activity, badge: activeConflictsCount > 0 ? `${activeConflictsCount} alerta` : undefined },
             { id: 'inbox', label: 'Bandeja Certificados', icon: Inbox, badge: unreadCertificates > 0 ? unreadCertificates : undefined },
             { id: 'actas', label: 'Actas Oficiales (E-14 / E-24)', icon: FileText },
             { id: 'census', label: 'Censo Estudiantil', icon: Users },
@@ -191,9 +206,41 @@ export const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Live System Events & Sync Health Ticker */}
+      <div
+        onClick={() => setCurrentTab('system-logs')}
+        className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-xs ${
+          activeConflictsCount > 0
+            ? 'bg-amber-50 border-amber-300 hover:bg-amber-100'
+            : 'bg-gradient-to-r from-purple-50 via-white to-slate-50 border-purple-200 hover:border-purple-300'
+        }`}
+      >
+        <div className="flex items-center gap-2.5">
+          <div className={`p-1.5 rounded-lg ${activeConflictsCount > 0 ? 'bg-amber-200 text-amber-900' : 'bg-purple-100 text-purple-800'}`}>
+            <Activity className="w-4 h-4 animate-pulse" />
+          </div>
+          <div className="text-xs">
+            <span className="font-bold text-slate-900">Monitor de Eventos & Sincronía: </span>
+            <span className="text-slate-600">
+              Urna <strong className={config.status === 'ABIERTA' ? 'text-emerald-700' : 'text-amber-700'}>{config.status}</strong> • {connectedComputersCount} computadores en red • {activeConflictsCount === 0 ? '0 conflictos activos (100% Sincronizado)' : `${activeConflictsCount} alerta de sincronización activa`}
+            </span>
+            {latestEvent && (
+              <span className="hidden md:inline text-purple-700 ml-2 font-medium">
+                • Último: <em>{latestEvent.title}</em>
+              </span>
+            )}
+          </div>
+        </div>
+
+        <span className="text-xs font-bold text-purple-700 hover:text-purple-900 inline-flex items-center gap-1 self-end sm:self-auto shrink-0">
+          Ver Log en Tiempo Real →
+        </span>
+      </div>
+
       {/* Active Tab View */}
       {currentTab === 'results' && <LiveResultsTab />}
       {currentTab === 'analytics' && <VoterAnalyticsTab />}
+      {currentTab === 'system-logs' && <SystemEventsLogTab />}
       {currentTab === 'inbox' && <SuperadminInboxTab />}
       {currentTab === 'actas' && <OfficialActasTab />}
       {currentTab === 'census' && <CensusManagerTab />}

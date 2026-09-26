@@ -22,6 +22,7 @@ import {
   Position,
   SheetsSyncStatusInfo,
   Student,
+  SystemEvent,
   TerminalInfo,
   VotingCertificate
 } from '../types/election';
@@ -90,6 +91,11 @@ interface ElectionContextType {
   sheetsSyncInfo: SheetsSyncStatusInfo;
   forceServerSheetsSync: () => Promise<{ success: boolean; rowsSynced: number; message: string }>;
   recordResultsToSheets: () => Promise<{ success: boolean; message: string; details?: any }>;
+
+  // Real-Time System Events Log & Conflict Audit
+  systemEvents: SystemEvent[];
+  addSystemEvent: (event: Omit<SystemEvent, 'id' | 'timestamp'>) => void;
+  clearSystemEvents: () => void;
 
   // Authentication states & actions
   isAdminAuthenticated: boolean;
@@ -225,6 +231,41 @@ const INITIAL_LOGS: AuditLog[] = [
     details: 'Votos emitidos y sellados en urna criptográfica. Certificado emitido CE-20260917-M01-9F2A14.',
     hash: '7c82e01ab9d4530fae284918e7cb410385926c41b802e5a730456c8201fb2941',
     status: 'VERIFICADO'
+  }
+];
+
+const INITIAL_SYSTEM_EVENTS: SystemEvent[] = [
+  {
+    id: 'sysevt-001',
+    timestamp: new Date(Date.now() - 3600000).toISOString(),
+    type: 'URNA_STATUS',
+    severity: 'SUCCESS',
+    title: 'Apertura de Jornada Electoral y Urnas Digitales',
+    description: 'La urna digital institucional se encuentra en estado ABIERTA. Protocolo criptográfico de sellado activo.',
+    source: 'Comisión Electoral Central',
+    resolved: true,
+    metadata: { status: 'ABIERTA', academicYear: 2026 }
+  },
+  {
+    id: 'sysevt-002',
+    timestamp: new Date(Date.now() - 2400000).toISOString(),
+    type: 'SHEETS_SYNC',
+    severity: 'SUCCESS',
+    title: 'Conexión Establecida con Base de Datos Google Sheets',
+    description: 'Enlace bidireccional verificado. Censo, candidaturas y jurados sincronizados con Google Apps Script.',
+    source: 'Conector Google Sheets',
+    resolved: true,
+    metadata: { status: 'success' }
+  },
+  {
+    id: 'sysevt-003',
+    timestamp: new Date(Date.now() - 1200000).toISOString(),
+    type: 'TERMINAL_NETWORK',
+    severity: 'INFO',
+    title: 'Red de Terminales Multiequipo Inicializada',
+    description: 'Servicio de eventos SSE activo con latencia < 150 ms y reconciliación cada 2.5 segundos.',
+    source: 'Servidor Central SSE',
+    resolved: true
   }
 ];
 
@@ -618,6 +659,40 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string>(new Date().toISOString());
 
+  // Real-time System Events Log
+  const [systemEvents, setSystemEvents] = useState<SystemEvent[]>(() => {
+    try {
+      const saved = localStorage.getItem('ekiraya_system_events');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_SYSTEM_EVENTS;
+  });
+
+  const addSystemEvent = (event: Omit<SystemEvent, 'id' | 'timestamp'>) => {
+    const newEvent: SystemEvent = {
+      ...event,
+      id: `sysevt-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      timestamp: new Date().toISOString()
+    };
+    setSystemEvents(prev => {
+      const updated = [newEvent, ...prev].slice(0, 120);
+      try {
+        localStorage.setItem('ekiraya_system_events', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  const clearSystemEvents = () => {
+    setSystemEvents([]);
+    try {
+      localStorage.removeItem('ekiraya_system_events');
+    } catch {}
+  };
+
   const currentVersionRef = useRef<number>(0);
   const currentStatusRef = useRef<ElectionStatus>(config.status);
   const currentVotesCountRef = useRef<number>(votes.length);
@@ -814,6 +889,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         sse.addEventListener('status_changed', (e: MessageEvent) => {
           try {
             const data = JSON.parse(e.data);
+            const oldStatus = currentStatusRef.current;
             if (data.config) {
               setConfig(data.config);
               currentStatusRef.current = data.config.status;
@@ -825,6 +901,17 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (data.newLog) {
               setAuditLogs(prev => [data.newLog, ...prev]);
             }
+            if (data.status) {
+              addSystemEvent({
+                type: 'URNA_STATUS',
+                severity: data.status === 'ABIERTA' ? 'SUCCESS' : (data.status === 'CERRADA' ? 'WARNING' : 'INFO'),
+                title: `Estado de Urna Sincronizado en Red: ${data.status}`,
+                description: `Transmisión SSE del servidor recibida. Urna unificada a estado ${data.status} en todas las terminales.`,
+                source: 'Servidor Central (SSE)',
+                resolved: true,
+                metadata: { newStatus: data.status, previousStatus: oldStatus }
+              });
+            }
           } catch (err) {
             console.error('Error procesando status_changed:', err);
           }
@@ -832,6 +919,14 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         sse.addEventListener('students_synced', () => {
           refreshServerState();
+          addSystemEvent({
+            type: 'CENSUS_UPDATE',
+            severity: 'INFO',
+            title: 'Censo Estudiantil Actualizado',
+            description: 'Se recibieron actualizaciones del censo electoral desde Google Sheets / Servidor.',
+            source: 'Servidor Central (SSE)',
+            resolved: true
+          });
         });
 
         sse.addEventListener('candidates_synced', () => {
@@ -848,6 +943,14 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         sse.addEventListener('all_synced', () => {
           refreshServerState();
+          addSystemEvent({
+            type: 'SYNC_RESOLVED',
+            severity: 'SUCCESS',
+            title: 'Sincronización Total de Bases de Datos',
+            description: 'Las 4 bases de datos (Votantes, Candidatos, Jurados, Administradores) fueron sincronizadas en lockstep.',
+            source: 'Servidor Central',
+            resolved: true
+          });
         });
 
         sse.addEventListener('config_updated', (e: MessageEvent) => {
@@ -890,6 +993,14 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             setSuperadminInbox([]);
             setActiveVoter(null);
             setLatestCertificate(null);
+            addSystemEvent({
+              type: 'URNA_STATUS',
+              severity: 'WARNING',
+              title: 'Reinicio de Urna a Cero',
+              description: 'La urna digital fue restablecida a cero para iniciar una nueva jornada electoral limpia.',
+              source: 'Comisión Electoral (Admin)',
+              resolved: true
+            });
           } catch (err) {
             console.error('Error procesando election_reset:', err);
           }
@@ -924,6 +1035,29 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   status: data.status || prev.googleSheets.status
                 }
               }));
+            }
+            if (data.status === 'success') {
+              addSystemEvent({
+                type: 'SHEETS_SYNC',
+                severity: 'SUCCESS',
+                title: 'Voto(s) Asentados en Google Sheets',
+                description: data.studentName 
+                  ? `Voto de ${data.studentName} (Folio ${data.folioNumber}) asentado en la pestaña Urna_Cifrada de Google Sheets.`
+                  : `Transmisión de datos confirmada por el Webhook de Google Sheets.`,
+                source: 'Conector Google Sheets',
+                resolved: true,
+                metadata: data
+              });
+            } else if (data.status === 'syncing' || (data.pendingQueueCount && data.pendingQueueCount > 0)) {
+              addSystemEvent({
+                type: 'SYNC_CONFLICT',
+                severity: 'WARNING',
+                title: 'Retraso de Conectividad con Google Sheets (Cola Activa)',
+                description: `Google Sheets no confirmó de inmediato (${data.pendingQueueCount} voto(s) en cola). El servidor está reintentando en segundo plano de manera segura.`,
+                source: 'Cola Resiliente Servidor',
+                resolved: false,
+                metadata: data
+              });
             }
           } catch (err) {
             console.error('Error procesando sheets_sync_updated:', err);
@@ -976,6 +1110,17 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             vData.votesCount !== currentVotesCountRef.current ||
             vData.votedCount !== currentVotedCountRef.current
           ) {
+            if (vData.status && vData.status !== currentStatusRef.current) {
+              addSystemEvent({
+                type: 'SYNC_CONFLICT',
+                severity: 'WARNING',
+                title: 'Discrepancia en Estado de Urna Detectada',
+                description: `La terminal registraba estado ${currentStatusRef.current} mientras el servidor central reportaba ${vData.status}. Reconciliación automática aplicada.`,
+                source: 'Monitor de Consistencia Local',
+                resolved: true,
+                metadata: { clientStatus: currentStatusRef.current, serverStatus: vData.status }
+              });
+            }
             await refreshServerState();
           }
         }
@@ -1188,6 +1333,16 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     if (found.hasVoted) {
+      addSystemEvent({
+        type: 'DOUBLE_VOTE_BLOCKED',
+        severity: 'WARNING',
+        title: 'Intento de Doble Voto Bloqueado',
+        description: `El estudiante ${found.fullName} (${docType} ${docNumber.trim()}) intentó reingresar a votar en Mesa 0${found.mesaNumber}. Su sufragio previo ya está blindado con Folio ${found.receiptFolio || 'Registrado'}.`,
+        source: `Cabina Mesa 0${found.mesaNumber}`,
+        mesaNumber: found.mesaNumber,
+        resolved: true,
+        metadata: { student: found.fullName, folio: found.receiptFolio }
+      });
       return {
         success: false,
         student: found,
@@ -1409,6 +1564,20 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       'Supervisión Electoral',
       `Cambio de estado de la jornada a: ${newStatus}`
     );
+
+    addSystemEvent({
+      type: 'URNA_STATUS',
+      severity: newStatus === 'ABIERTA' ? 'SUCCESS' : (newStatus === 'CERRADA' ? 'WARNING' : 'INFO'),
+      title: `Cambio de Estado de Urna: ${newStatus}`,
+      description: newStatus === 'ABIERTA'
+        ? 'Apertura formal de urna decretada por la administración. Se habilitan los tarjetones en todas las cabinas.'
+        : (newStatus === 'CERRADA'
+          ? 'Cierre formal de urna decretado. No se permiten nuevos votos estudiantiles.'
+          : 'Declaratoria de escrutinio final iniciada para consolidación de resultados.'),
+      source: 'Comisión Electoral (Admin)',
+      resolved: true,
+      metadata: { newStatus }
+    });
 
     try {
       const res = await fetch('/api/election/status', {
@@ -2433,7 +2602,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         uploadAndRestoreCloudBackup,
         sheetsSyncInfo,
         forceServerSheetsSync,
-        recordResultsToSheets
+        recordResultsToSheets,
+        systemEvents,
+        addSystemEvent,
+        clearSystemEvents
       }}
     >
       {children}
