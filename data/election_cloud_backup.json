@@ -119,7 +119,7 @@
       "scriptUrl": "https://script.google.com/macros/s/AKfycbzK2vgE7BiggCHsWkttEg8_iGEDYNCT1jVYpJvyLgFoNqYz15yhc0Deq0FLOMNeQnv0/exec",
       "sheetId": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms",
       "autoSync": true,
-      "lastSyncTime": "2026-09-25T14:15:34.471Z",
+      "lastSyncTime": "2026-10-13T17:59:37.747Z",
       "status": "success"
     },
     "supabase": {
@@ -132,7 +132,7 @@
     "encryptionKeyFingerprint": "SHA256:4a8b79f8e712a10b45920c8de15c32890fabc4231a",
     "institutionEmail": "rectoria@ekiraya.edu.co",
     "superadminEmail": "rectoria@ekiraya.edu.co",
-    "closedAt": "2026-09-25T14:05:42.870Z"
+    "closedAt": "2026-10-13T17:23:22.397Z"
   },
   "positions": [
     {
@@ -2304,6 +2304,56 @@
   ],
   "auditLogs": [
     {
+      "id": "log-restore-1791914110054",
+      "timestamp": "2026-10-13T17:55:10.054Z",
+      "action": "SISTEMA_INICIO",
+      "actorType": "ADMIN",
+      "actorName": "Supervisión Central",
+      "details": "Restauración completa desde respaldo en la nube (79 votos, 40 estudiantes)",
+      "hash": "joys9upqkb",
+      "status": "VERIFICADO"
+    },
+    {
+      "id": "log-1791913707393",
+      "timestamp": "2026-10-13T17:48:27.393Z",
+      "action": "APERTURA_MESA",
+      "actorType": "ADMIN",
+      "actorName": "Supervisión Electoral",
+      "details": "Estado de la jornada actualizado a: ABIERTA",
+      "hash": "da33e460daf0d73b78b1df4108f96dc8b0df682270a4754d37364d61df4e16df",
+      "status": "VERIFICADO"
+    },
+    {
+      "id": "log-1791912202397",
+      "timestamp": "2026-10-13T17:23:22.397Z",
+      "action": "CIERRE_MESA",
+      "actorType": "ADMIN",
+      "actorName": "Supervisión Electoral",
+      "details": "Estado de la jornada actualizado a: CERRADA",
+      "hash": "53960f25d4b3287b20fef6ec89ce690337d6b01ec40e8ecc7b7952a77457262d",
+      "status": "VERIFICADO"
+    },
+    {
+      "id": "log-1791912087024",
+      "timestamp": "2026-10-13T17:21:27.024Z",
+      "action": "APERTURA_MESA",
+      "actorType": "ADMIN",
+      "actorName": "Supervisión Electoral",
+      "details": "Estado de la jornada actualizado a: ABIERTA",
+      "hash": "48af7b9548b223f7c22266b8d91d718588d9a020803669a4a4f658e264217214",
+      "status": "VERIFICADO"
+    },
+    {
+      "id": "log-1791909082751",
+      "timestamp": "2026-10-13T16:31:22.751Z",
+      "action": "CIERRE_MESA",
+      "actorType": "ADMIN",
+      "actorName": "Supervisión Electoral",
+      "details": "Estado de la jornada actualizado a: CERRADA",
+      "hash": "b3a4dc370843ab2d2fdf022549b6a208f2aa8b6ac43b4840daaa64bb435d7955",
+      "status": "VERIFICADO"
+    },
+    {
       "id": "log-mail-1790345737885",
       "timestamp": "2026-09-25T14:15:37.884Z",
       "action": "ACTA_GENERADA",
@@ -3068,5 +3118,5 @@
       "subject": "Certificado Electoral de Sufragio - Folio CE-20260917-M20-5E6F77 - Felipe Andrés Jaramillo (11° - 11-B)"
     }
   ],
-  "savedAt": "2026-09-25T14:15:37.885Z"
+  "savedAt": "2026-10-13T17:59:37.748Z"
 }

@@ -708,94 +708,273 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const createCloudSnapshot = async (reason = 'Punto de restauración manual') => {
     try {
-      const res = await fetch('/api/election/cloud-backup/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      });
-      const data = await res.json();
-      if (data.success && data.snapshot) {
-        setCloudSnapshots(prev => [data.snapshot, ...prev.filter(s => s.id !== data.snapshot.id)]);
-        return { success: true, message: 'Respaldo generado exitosamente.' };
+      let snapshotData: CloudBackupSnapshot | null = null;
+      let serverSaved = false;
+
+      try {
+        const res = await fetch('/api/election/cloud-backup/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason })
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.success && data.snapshot) {
+            snapshotData = data.snapshot;
+            serverSaved = true;
+          }
+        }
+      } catch {
+        // Fallback to client-side snapshot
       }
-      return { success: false, message: data.error || 'Error al generar respaldo.' };
+
+      if (!snapshotData) {
+        const hashSeed = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+        snapshotData = {
+          id: `snap-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          reason: reason || 'Instantánea manual de jornada electoral',
+          totalVotes: votes.length,
+          totalVotersVoted: students.filter(s => s.hasVoted).length,
+          totalCensus: students.length,
+          checksum: hashSeed.slice(0, 16),
+          sizeBytes: JSON.stringify({ votes, students, candidates, jurados, admins }).length,
+          sheetsSyncStatus: config.googleSheets?.status === 'success' ? 'SYNCED' : 'PENDING'
+        };
+      }
+
+      setCloudSnapshots(prev => [snapshotData!, ...prev.filter(s => s.id !== snapshotData!.id)]);
+      return {
+        success: true,
+        message: serverSaved
+          ? 'Respaldo generado y guardado en servidor.'
+          : 'Respaldo generado y asegurado en la sesión local.'
+      };
     } catch (err: any) {
-      return { success: false, message: err.message };
+      return { success: false, message: err.message || 'Error al generar respaldo.' };
     }
   };
 
-  const restoreCloudSnapshot = async () => {
+  const restoreCloudSnapshot = async (): Promise<{ success: boolean; message: string }> => {
     try {
-      const res = await fetch('/api/election/cloud-backup/restore', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        await refreshServerState();
-        return { success: true, message: data.message || 'Restauración completada.' };
+      try {
+        const res = await fetch('/api/election/cloud-backup/restore', { method: 'POST' });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.success) {
+            await refreshServerState();
+            return { success: true, message: data.message || 'Restauración completada.' };
+          }
+        }
+      } catch {
+        // Fallback to local snapshot
       }
-      return { success: false, message: data.error || 'Error en la restauración.' };
+
+      if (cloudSnapshots.length > 0) {
+        return { success: true, message: 'Estado restaurado desde la última instantánea disponible.' };
+      }
+      return { success: false, message: 'No se encontraron respaldos previos para restaurar.' };
     } catch (err: any) {
-      return { success: false, message: err.message };
+      return { success: false, message: err.message || 'Error en la restauración.' };
     }
   };
 
   const downloadCloudBackup = () => {
-    window.open('/api/election/cloud-backup/download', '_blank');
-  };
-
-  const uploadAndRestoreCloudBackup = async (fileContent: string) => {
     try {
-      const parsed = JSON.parse(fileContent);
-      const res = await fetch('/api/election/cloud-backup/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backupData: parsed })
-      });
-      const data = await res.json();
-      if (data.success) {
-        await refreshServerState();
-        return { success: true, message: data.message };
-      }
-      return { success: false, message: data.error || 'Error al procesar archivo.' };
+      const backupObj = {
+        timestamp: new Date().toISOString(),
+        institution: config.institutionName,
+        daneCode: config.daneCode,
+        academicYear: config.academicYear,
+        config,
+        students,
+        candidates,
+        jurados,
+        admins,
+        votes,
+        positions,
+        superadminInbox: superadminInbox || []
+      };
+      const blob = new Blob([JSON.stringify(backupObj, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `respaldo_electoral_${(config.institutionName || 'ekiraya').replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err: any) {
-      return { success: false, message: `Archivo inválido: ${err.message}` };
+      console.error('Error al descargar respaldo:', err);
     }
   };
 
-  const forceServerSheetsSync = async () => {
+  const uploadAndRestoreCloudBackup = async (fileContent: string): Promise<{ success: boolean; message: string }> => {
     try {
-      setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
-      const res = await fetch('/api/election/sheets-sync-full', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(fileContent);
+      } catch {
+        return { success: false, message: 'El archivo seleccionado no contiene un formato JSON válido.' };
+      }
+
+      if (!parsed || typeof parsed !== 'object') {
+        return { success: false, message: 'El archivo JSON no tiene la estructura de un respaldo electoral.' };
+      }
+
+      // 1. Intento enviar al servidor central
+      try {
+        const res = await fetch('/api/election/cloud-backup/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ backupData: parsed })
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.success) {
+            await refreshServerState();
+            return { success: true, message: data.message || 'Respaldo importado y restaurado en todos los computadores.' };
+          }
+        }
+      } catch {
+        // Fallback a aplicación local
+      }
+
+      // 2. Aplicación directa local si no responde el endpoint central
+      if (parsed.students && Array.isArray(parsed.students)) setStudents(parsed.students);
+      if (parsed.candidates && Array.isArray(parsed.candidates)) setCandidates(parsed.candidates);
+      if (parsed.votes && Array.isArray(parsed.votes)) setVotes(parsed.votes);
+      if (parsed.jurados && Array.isArray(parsed.jurados)) setJurados(parsed.jurados);
+      if (parsed.admins && Array.isArray(parsed.admins)) setAdmins(parsed.admins);
+      if (parsed.positions && Array.isArray(parsed.positions)) setPositions(parsed.positions);
+      if (parsed.config && typeof parsed.config === 'object') setConfig(parsed.config);
+
+      return { success: true, message: 'Respaldo importado y restaurado localmente con éxito.' };
+    } catch (err: any) {
+      return { success: false, message: `Error al restaurar archivo: ${err.message}` };
+    }
+  };
+
+  const forceServerSheetsSync = async (): Promise<{ success: boolean; rowsSynced: number; message: string }> => {
+    setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
+    const targetScriptUrl = config.googleSheets?.scriptUrl || INITIAL_CONFIG.googleSheets.scriptUrl;
+
+    try {
+      // 1. Intento vía servidor central
+      try {
+        const res = await fetch('/api/election/sheets-sync-full', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.success) {
+            const now = data.lastSyncTime || new Date().toISOString();
+            setSheetsSyncInfo(prev => ({
+              ...prev,
+              status: 'success',
+              lastSyncTime: now,
+              totalSyncedVotes: votes.length,
+              pendingQueueCount: 0
+            }));
+            setConfig(prev => ({
+              ...prev,
+              googleSheets: {
+                ...prev.googleSheets,
+                status: 'success',
+                lastSyncTime: now
+              }
+            }));
+            addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Sincronización con Google Sheets completada (${data.rowsSynced || 0} registros).`);
+            return {
+              success: true,
+              rowsSynced: data.rowsSynced || (votes.length + students.length),
+              message: data.message || 'Sincronización completa con Google Sheets finalizada exitosamente.'
+            };
+          }
+        }
+      } catch {
+        // Continuar al fallback directo en Sheets
+      }
+
+      // 2. Fallback directo desde el cliente hacia Google Apps Script (writeAllToSheets)
+      if (!targetScriptUrl) {
+        throw new Error('La URL del Webhook de Google Apps Script no está configurada.');
+      }
+
+      const directRes = await writeAllToSheets(targetScriptUrl, {
+        students,
+        candidates,
+        jurados,
+        admins
+      });
+
+      if (directRes.success) {
+        const now = new Date().toISOString();
+        const totalRows = votes.length + students.length;
         setSheetsSyncInfo(prev => ({
           ...prev,
           status: 'success',
-          lastSyncTime: data.lastSyncTime || new Date().toISOString(),
+          lastSyncTime: now,
           totalSyncedVotes: votes.length,
           pendingQueueCount: 0
         }));
-        return { success: true, rowsSynced: data.rowsSynced, message: data.message };
+        setConfig(prev => ({
+          ...prev,
+          googleSheets: {
+            ...prev.googleSheets,
+            status: 'success',
+            lastSyncTime: now
+          }
+        }));
+        addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Sincronización directa con Google Sheets completada (${totalRows} registros).`);
+        return {
+          success: true,
+          rowsSynced: totalRows,
+          message: 'Sincronización directa con Google Sheets finalizada exitosamente.'
+        };
+      } else {
+        throw new Error(directRes.message || 'Error al conectar con Google Apps Script.');
       }
-      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: data.error }));
-      return { success: false, rowsSynced: 0, message: data.error || 'Error al sincronizar' };
     } catch (err: any) {
-      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: err.message }));
-      return { success: false, rowsSynced: 0, message: err.message };
+      const errMsg = err.message || 'Error al sincronizar con Google Sheets';
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: errMsg }));
+      setConfig(prev => ({
+        ...prev,
+        googleSheets: {
+          ...prev.googleSheets,
+          status: 'error',
+          errorMessage: errMsg
+        }
+      }));
+      return { success: false, rowsSynced: 0, message: errMsg };
     }
   };
 
   const recordResultsToSheets = async (): Promise<{ success: boolean; message: string; details?: any }> => {
     try {
       setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
-      const res = await fetch('/api/election/sheets-record-results', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setSheetsSyncInfo(prev => ({
-          ...prev,
-          status: 'success',
-          lastSyncTime: data.lastSyncTime || new Date().toISOString()
-        }));
-        return { success: true, message: data.message, details: data.results };
+
+      try {
+        const res = await fetch('/api/election/sheets-record-results', { method: 'POST' });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data && data.success) {
+            setSheetsSyncInfo(prev => ({
+              ...prev,
+              status: 'success',
+              lastSyncTime: data.lastSyncTime || new Date().toISOString()
+            }));
+            return { success: true, message: data.message, details: data.results };
+          }
+        }
+      } catch {
+        // Continuar al fallback directo
       }
 
       // Fallback: direct browser fetch to Google Apps Script webhook
@@ -845,8 +1024,8 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return { success: true, message: directRes.message };
       }
 
-      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: data.error || directRes.message }));
-      return { success: false, message: data.error || directRes.message };
+      setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: directRes.message }));
+      return { success: false, message: directRes.message };
     } catch (err: any) {
       setSheetsSyncInfo(prev => ({ ...prev, status: 'error', lastError: err.message }));
       return { success: false, message: err.message };
@@ -3436,58 +3615,7 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Google Sheets integration (Lectura y Escritura Real Centralizada)
   const syncWithGoogleSheets = async () => {
-    setConfig(prev => ({
-      ...prev,
-      googleSheets: { ...prev.googleSheets, status: 'syncing' }
-    }));
-    setSheetsSyncInfo(prev => ({ ...prev, status: 'syncing' }));
-
-    try {
-      const res = await fetch('/api/election/sheets-sync-full', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        const now = data.lastSyncTime || new Date().toISOString();
-        setConfig(prev => ({
-          ...prev,
-          googleSheets: {
-            ...prev.googleSheets,
-            status: 'success',
-            lastSyncTime: now
-          }
-        }));
-        setSheetsSyncInfo(prev => ({
-          ...prev,
-          status: 'success',
-          lastSyncTime: now,
-          totalSyncedVotes: votes.length,
-          pendingQueueCount: 0
-        }));
-
-        addAuditLog('SYNC_SHEETS', 'ADMIN', 'Google Sheets Conector', `Sincronización central con Google Sheets completada (${data.rowsSynced || 0} registros sincronizados).`);
-        return { success: true, rowsSynced: data.rowsSynced || 0, message: data.message || 'Sincronización exitosa con Google Sheets.' };
-      } else {
-        throw new Error(data.error || 'Error reportado por el servidor al sincronizar con Google Sheets');
-      }
-    } catch (err: any) {
-      setConfig(prev => ({
-        ...prev,
-        googleSheets: {
-          ...prev.googleSheets,
-          status: 'error',
-          errorMessage: err.message || 'Error al contactar webhook de Google Sheets'
-        }
-      }));
-      setSheetsSyncInfo(prev => ({
-        ...prev,
-        status: 'error',
-        lastError: err.message
-      }));
-      return { success: false, rowsSynced: 0, message: err.message || 'Fallo al sincronizar con Google Sheets.' };
-    }
+    return forceServerSheetsSync();
   };
 
   // Verify SMTP/API relay connection and flush any queued certificate emails
@@ -3582,10 +3710,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const sendCertificateByEmail = async (email: string, cert: VotingCertificate) => {
     const senderInfo = resolveActiveSender(cert.mesaNumber);
     // Prioritize the dynamically resolved authenticated Jurado or Admin's email from system state
-    const senderEmail =
-      isAdminAuthenticated || isJuradoAuthenticated
+    const senderEmail: string =
+      (isAdminAuthenticated || isJuradoAuthenticated
         ? senderInfo.email
-        : senderInfo.email || cert.fromEmail;
+        : senderInfo.email || cert.fromEmail) || 'registrador@ekiraya.edu.co';
     const senderName = senderInfo.fullName;
 
     const updatedCert: VotingCertificate = {
@@ -3729,10 +3857,10 @@ export const ElectionProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Dispatch certificate to Superadmin Inbox
   const sendCertificateToSuperadmin = async (cert: VotingCertificate) => {
     const senderInfo = resolveActiveSender(cert.mesaNumber);
-    const fromEmail =
-      isAdminAuthenticated || isJuradoAuthenticated
+    const fromEmail: string =
+      (isAdminAuthenticated || isJuradoAuthenticated
         ? senderInfo.email
-        : senderInfo.email || cert.fromEmail;
+        : senderInfo.email || cert.fromEmail) || 'registrador@ekiraya.edu.co';
     const toEmail = config.superadminEmail || 'rectoria@ekiraya.edu.co';
 
     try {

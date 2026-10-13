@@ -170,6 +170,7 @@ export function buildSystemStateAdminRow(envelope: SheetsSystemStateEnvelope): A
     id: SYS_STATE_ADMIN_ID,
     fullName: JSON.stringify(envelope),
     username: SYS_STATE_USERNAME,
+    documentNumber: '00000000',
     pin: envelope.urnaStatus,
     role: 'SISTEMA' as any,
     status: 'ACTIVO'

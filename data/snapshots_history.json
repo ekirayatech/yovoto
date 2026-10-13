@@ -1,5 +1,93 @@
 [
   {
+    "id": "snap-1791914377749",
+    "timestamp": "2026-10-13T17:59:37.749Z",
+    "reason": "Sincronización completa con Google Sheets",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "e1a6e0ef3deb0f8a",
+    "sizeBytes": 113280,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1791914116642",
+    "timestamp": "2026-10-13T17:55:16.642Z",
+    "reason": "Sincronización completa con Google Sheets",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "df50a1f637867c59",
+    "sizeBytes": 113280,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1791914110040",
+    "timestamp": "2026-10-13T17:55:10.040Z",
+    "reason": "test",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "28a7cf8df039c568",
+    "sizeBytes": 112921,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1791914047347",
+    "timestamp": "2026-10-13T17:54:07.347Z",
+    "reason": "Sincronización completa con Google Sheets",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "59c8c2dfa88ccae6",
+    "sizeBytes": 112921,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1791913707394",
+    "timestamp": "2026-10-13T17:48:27.394Z",
+    "reason": "Cambio de estado de urna a: ABIERTA",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "8081e7a5ec6cc5a4",
+    "sizeBytes": 112921,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1791912202398",
+    "timestamp": "2026-10-13T17:23:22.398Z",
+    "reason": "Cambio de estado de urna a: CERRADA",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "12e20e3f0d8d2874",
+    "sizeBytes": 112547,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1791912087025",
+    "timestamp": "2026-10-13T17:21:27.025Z",
+    "reason": "Cambio de estado de urna a: ABIERTA",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "9a23e52c1f55093d",
+    "sizeBytes": 112175,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
+    "id": "snap-1791909082752",
+    "timestamp": "2026-10-13T16:31:22.752Z",
+    "reason": "Cambio de estado de urna a: CERRADA",
+    "totalVotes": 79,
+    "totalVotersVoted": 20,
+    "totalCensus": 40,
+    "checksum": "f0b89a7e721d9340",
+    "sizeBytes": 111801,
+    "sheetsSyncStatus": "SYNCED"
+  },
+  {
     "id": "snap-1790345737886",
     "timestamp": "2026-09-25T14:15:37.886Z",
     "reason": "Voto depositado en urna - Folio CE-20260925-M01-6002WHJX",

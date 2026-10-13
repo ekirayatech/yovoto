@@ -442,8 +442,8 @@ export const RealtimeDataVisualizationPanel: React.FC<RealtimeDataVisualizationP
                         innerRadius={58}
                         outerRadius={95}
                         paddingAngle={3}
-                        label={({ shortName, porcentaje }) =>
-                          porcentaje > 0 ? `${shortName}: ${porcentaje}%` : ''
+                        label={(props: any) =>
+                          props.porcentaje > 0 ? `${props.shortName}: ${props.porcentaje}%` : ''
                         }
                       >
                         {candidateChartData.map(entry => (
