@@ -19,6 +19,8 @@ import {
   Laptop,
   Layers,
   Lock,
+  Mail,
+  MailCheck,
   Play,
   RefreshCw,
   Send,
@@ -41,6 +43,7 @@ import {
   readCandidatesFromSheets,
   readCensusFromSheets,
   readJuradosFromSheets,
+  verifyEmailRelayViaSheets,
   writeAdminsToSheets,
   writeAllToSheets,
   writeCandidatesToSheets,
@@ -109,6 +112,42 @@ export const IntegrationsTab: React.FC = () => {
     message: string;
     details?: string;
   } | null>(null);
+
+  // Email Relay & Webhook Testing state
+  const [testingRelay, setTestingRelay] = useState<boolean>(false);
+  const [relayFeedback, setRelayFeedback] = useState<{
+    status: 'idle' | 'success' | 'error';
+    message: string;
+    details?: string;
+  }>({ status: 'idle', message: '' });
+
+  const handleTestRelay = async () => {
+    setTestingRelay(true);
+    setRelayFeedback({ status: 'idle', message: '' });
+    try {
+      const res = await verifyEmailRelayViaSheets(scriptUrl);
+      if (res.connected) {
+        setRelayFeedback({
+          status: 'success',
+          message: `¡Conexión y Relay Verificados! El Webhook de Apps Script responde correctamente (${res.latencyMs} ms). Envío de correos por MailApp y sincronización de bases de datos habilitados.`
+        });
+      } else {
+        setRelayFeedback({
+          status: 'error',
+          message: res.message || 'No se pudo conectar con el Webhook de Google Apps Script.',
+          details: 'Verifique que en Apps Script haya seleccionado "Implementar > Nueva implementación > Aplicación web" y que en "Quién tiene acceso" haya elegido "Cualquiera" (Anyone). Copie la URL terminada en /exec.'
+        });
+      }
+    } catch (err: any) {
+      setRelayFeedback({
+        status: 'error',
+        message: err.message || 'Fallo de red al probar el Webhook.',
+        details: 'Revise que la URL inicie con https://script.google.com/macros/s/ y termine en /exec.'
+      });
+    } finally {
+      setTestingRelay(false);
+    }
+  };
 
   // Supabase Local Form
   const [supaUrl, setSupaUrl] = useState<string>(config.supabase.projectUrl);
@@ -602,9 +641,9 @@ function parseAdminRows(rows) {
         st = 'INACTIVO';
       } else if (valLower === 'activo' || valLower === 'true') {
         st = 'ACTIVO';
-      } else if (!pin && /^[a-zA-Z0-9_\-.]{4,20}$/.test(val) && (/\d/.test(val) || valLower.indexOf('admin') !== -1 || valLower.indexOf('pass') !== -1)) {
+      } else if (!pin && /^[a-zA-Z0-9._-]{4,20}$/.test(val) && (/\d/.test(val) || valLower.indexOf('admin') !== -1 || valLower.indexOf('pass') !== -1)) {
         pin = val;
-      } else if (!user && /^[a-z0-9_.\-]{3,25}$/i.test(val) && isNaN(Number(val))) {
+      } else if (!user && /^[a-z0-9._-]{3,25}$/i.test(val) && isNaN(Number(val))) {
         user = val;
       } else if (!name && val.length > 2 && isNaN(Number(val))) {
         name = val;
@@ -1034,13 +1073,25 @@ function sendCertificateHtmlEmail(data) {
     "<p style='font-size:11px;color:#64748b;font-family:monospace;word-break:break-all;'>HASH SHA-256: " + (data.verificationHash || "") + "</p>" +
     "</div></div>";
 
-  MailApp.sendEmail({
-    to: recipient,
-    replyTo: fromEmail,
-    name: registradorName + " (Registrador Electoral Ekirayá)",
-    subject: "Certificado Electoral de Sufragio - Folio " + folio + " - " + studentName,
-    htmlBody: htmlBody
-  });
+  try {
+    MailApp.sendEmail({
+      to: recipient,
+      replyTo: fromEmail,
+      name: registradorName + " (Registrador Electoral Ekirayá)",
+      subject: "Certificado Electoral de Sufragio - Folio " + folio + " - " + studentName,
+      htmlBody: htmlBody
+    });
+  } catch (mErr) {
+    try {
+      GmailApp.sendEmail(recipient, "Certificado Electoral de Sufragio - Folio " + folio + " - " + studentName, "", {
+        htmlBody: htmlBody,
+        replyTo: fromEmail,
+        name: registradorName + " (Registrador Electoral Ekirayá)"
+      });
+    } catch (gErr) {
+      Logger.log("Error al despachar correo desde Apps Script: " + gErr);
+    }
+  }
 }
 
 function respondJSON(obj) {
@@ -1251,13 +1302,51 @@ function respondJSON(obj) {
                   <span>Escritura automática instantánea en Google Sheets con cada sufragio</span>
                 </label>
 
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl font-bold transition-colors shadow-xs"
-                >
-                  Guardar Configuración
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTestRelay}
+                    disabled={testingRelay || !scriptUrl}
+                    className="px-4 py-2.5 bg-purple-700 hover:bg-purple-800 text-white rounded-xl font-bold transition-colors shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {testingRelay ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-200" />
+                    ) : (
+                      <MailCheck className="w-3.5 h-3.5 text-purple-200" />
+                    )}
+                    <span>{testingRelay ? 'Comprobando...' : '⚡ Probar Conexión y Envío de Correo (Webhook)'}</span>
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl font-bold transition-colors shadow-xs cursor-pointer"
+                  >
+                    Guardar Configuración
+                  </button>
+                </div>
               </div>
+
+              {relayFeedback.status !== 'idle' && (
+                <div className={`p-3.5 rounded-xl text-xs font-mono border ${
+                  relayFeedback.status === 'success'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                    : 'bg-rose-50 border-rose-300 text-rose-950'
+                }`}>
+                  <div className="flex items-start gap-2 font-bold mb-1">
+                    {relayFeedback.status === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    )}
+                    <span>{relayFeedback.message}</span>
+                  </div>
+                  {relayFeedback.details && (
+                    <p className="mt-1 text-[11px] text-slate-700 bg-white/70 p-2 rounded-lg border border-slate-200 font-sans">
+                      {relayFeedback.details}
+                    </p>
+                  )}
+                </div>
+              )}
             </form>
 
             {/* 4 DATABASES VERIFICATION STATION */}

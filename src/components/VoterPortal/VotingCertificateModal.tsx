@@ -2,6 +2,7 @@ import confetti from 'canvas-confetti';
 import {
   Check,
   CheckCircle,
+  Clock,
   Copy,
   Download,
   Mail,
@@ -34,7 +35,7 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
     certificate.studentEmail || 'estudiante@ekiraya.edu.co'
   );
   const [isSendingEmail, setIsSendingEmail] = useState<boolean>(false);
-  const [emailStatus, setEmailStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [emailStatus, setEmailStatus] = useState<'idle' | 'success' | 'queued' | 'error'>('idle');
   const [copiedFolio, setCopiedFolio] = useState<boolean>(false);
 
   // Trigger celebration confetti on mount
@@ -71,8 +72,10 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
 
     try {
       const res = await sendCertificateByEmail(recipientEmail, certificate);
-      if (res.success) {
+      if (res.success && res.relayStatus === 'DISPATCHED') {
         setEmailStatus('success');
+      } else if (res.success && res.relayStatus === 'QUEUED') {
+        setEmailStatus('queued');
       } else {
         setEmailStatus('error');
       }
@@ -323,6 +326,17 @@ export const VotingCertificateModal: React.FC<VotingCertificateModalProps> = ({
                 <Check className="w-3.5 h-3.5 text-emerald-600" />
                 Certificado digital remitido desde <strong className="font-mono">{senderEmail}</strong> (Usuario Registrador) a <strong>{recipientEmail}</strong>.
               </p>
+            )}
+            {emailStatus === 'queued' && (
+              <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 p-2.5 rounded-xl mt-2 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                  <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>Certificado encolado en el sistema electoral</span>
+                </div>
+                <p className="text-[10px] text-amber-700">
+                  El certificado quedó registrado con folio <strong>{certificate.folioNumber}</strong>. El webhook de Google Apps Script o SMTP aún no está conectado en vivo, por lo que puede descargar el PDF oficial de inmediato o imprimirlo.
+                </p>
+              </div>
             )}
             {emailStatus === 'error' && (
               <p className="text-[11px] text-red-600 font-medium mt-2">
